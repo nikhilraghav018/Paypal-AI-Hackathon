@@ -19,7 +19,6 @@ export interface Policy {
   maxPurchasesPerDay: number;
   blockedCategories: string[];
   blockedDomains: string[];
-  killSwitch: boolean;
 }
 
 export interface RequestedItem {
@@ -104,8 +103,17 @@ export interface AgentEvent {
   hash: string;
 }
 
+export interface CartItem extends Candidate {
+  /** The mission whose screening cleared this product. */
+  sourceMissionId: string;
+}
+
 export interface Mission {
   id: string;
+  /** Bought from the cart page rather than by a shopping mission. */
+  fromCart?: boolean;
+  /** Part of totalCents. Only cart orders carry tax. */
+  taxCents?: number;
   prompt: string;
   createdAt: string;
   status: MissionStatus;

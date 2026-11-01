@@ -54,18 +54,23 @@ export function buildOrderBody(input: {
   missionId: string;
   basket: BasketLine[];
   totalCents: number;
+  taxCents?: number;
   returnUrl: string;
   cancelUrl: string;
 }) {
+  const taxCents = input.taxCents ?? 0;
   return {
     intent: "CAPTURE",
     purchase_units: [
       {
         custom_id: input.missionId,
-        description: "Agent Allowance sandbox purchase",
+        description: "Velora sandbox purchase",
         amount: {
           ...money(input.totalCents),
-          breakdown: { item_total: money(input.totalCents) },
+          breakdown: {
+            item_total: money(input.totalCents - taxCents),
+            ...(taxCents ? { tax_total: money(taxCents) } : {}),
+          },
         },
         items: input.basket.map((line) => ({
           name: line.title.slice(0, 127),
@@ -77,7 +82,7 @@ export function buildOrderBody(input: {
     payment_source: {
       paypal: {
         experience_context: {
-          brand_name: "Agent Allowance",
+          brand_name: "Velora",
           shipping_preference: "NO_SHIPPING",
           user_action: "PAY_NOW",
           return_url: input.returnUrl,

@@ -20,6 +20,7 @@
   --aurora-a: #2fbf97;
   --aurora-b: #6a5cff;
   --aurora-c: #ff7eb0;
+  --section: #7cc4ff;
 }
 
 @theme inline {
@@ -56,6 +57,18 @@ h2,
   font-family: var(--font-display), var(--font-sans), sans-serif;
 }
 
+.brand {
+  font-family: var(--font-brand), var(--font-display), sans-serif;
+  font-size: clamp(1.75rem, 3vw, 2.25rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.section-title {
+  color: var(--section);
+}
+
 button,
 a,
 summary {
@@ -68,7 +81,6 @@ button:disabled {
 
 button:focus-visible,
 input:focus-visible,
-textarea:focus-visible,
 a:focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--accent);
@@ -135,10 +147,6 @@ summary:focus-visible {
   background: var(--panel);
   color: var(--ink);
   border: 1px solid rgb(255 255 255 / 0.06);
-}
-
-.btn-quiet.kill-switch {
-  color: var(--danger);
 }
 
 select option {
@@ -446,5 +454,139 @@ select option {
   *::after {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* Payment successful. Resting styles are the finished state, so reduced motion still shows the tick. */
+.paid-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.75rem;
+  overflow: hidden;
+  background: var(--bg);
+  animation: paid-out 0.45s ease 4.15s both;
+}
+
+.paid-tick {
+  overflow: visible;
+  animation: paid-pop 0.5s cubic-bezier(0.3, 1.6, 0.5, 1) 0.85s both;
+}
+
+.paid-ring {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 5;
+  stroke-linecap: round;
+  stroke-dasharray: 1;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  animation: paid-draw 0.75s cubic-bezier(0.65, 0, 0.35, 1) 0.1s both;
+}
+
+.paid-disc {
+  fill: var(--accent);
+  transform-origin: center;
+  animation: paid-fill 0.35s ease-out 0.75s both;
+}
+
+.paid-check {
+  fill: none;
+  stroke: var(--accent-ink);
+  stroke-width: 9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  animation: paid-draw 0.45s cubic-bezier(0.65, 0, 0.35, 1) 0.95s both;
+}
+
+.paid-caption {
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  text-align: center;
+  animation: rise 0.5s ease 1.25s both;
+}
+
+.confetti {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.confetti-piece {
+  position: absolute;
+  opacity: 0;
+  animation-name: confetti-fly;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
+}
+
+.confetti-rect {
+  width: 9px;
+  height: 14px;
+  border-radius: 2px;
+}
+
+.confetti-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.confetti-ribbon {
+  width: 5px;
+  height: 22px;
+  border-radius: 3px;
+}
+
+@keyframes paid-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes paid-fill {
+  from {
+    transform: scale(0);
+  }
+}
+
+@keyframes paid-pop {
+  0% {
+    transform: scale(0.86);
+  }
+}
+
+@keyframes paid-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes confetti-fly {
+  0% {
+    opacity: 1;
+    transform: translate(0, 0) rotate(0);
+    animation-timing-function: cubic-bezier(0.1, 0.75, 0.3, 1);
+  }
+  32% {
+    opacity: 1;
+    transform: translate(var(--peak-x), var(--peak-y)) rotate(calc(var(--spin) * 0.4));
+    animation-timing-function: cubic-bezier(0.45, 0, 0.8, 0.6);
+  }
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(var(--end-x), var(--end-y)) rotate(var(--spin));
   }
 }

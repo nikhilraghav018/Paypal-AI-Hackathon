@@ -16,7 +16,6 @@ export const DEFAULT_POLICY: Policy = {
   maxPurchasesPerDay: 5,
   blockedCategories: ["alcohol", "tobacco", "gambling", "weapons", "crypto"],
   blockedDomains: [],
-  killSwitch: false,
 };
 
 const CATEGORY_TERMS: Record<string, RegExp> = {
@@ -110,12 +109,6 @@ export function evaluatePolicy(input: {
   const checks: PolicyCheck[] = [];
   const add = (rule: string, outcome: PolicyCheck["outcome"], detail: string) =>
     checks.push({ rule, outcome, detail });
-
-  add(
-    "Kill switch",
-    policy.killSwitch ? "block" : "pass",
-    policy.killSwitch ? "Kill switch is on, so all agent spending is frozen." : "Spending is enabled.",
-  );
 
   add(
     "Basket present",

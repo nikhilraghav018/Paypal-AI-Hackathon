@@ -298,17 +298,15 @@ export function summaryByRules(mission: Mission): string {
   if (!mission.basket.length && mission.checks.filter((c) => c.outcome === "block").length === 1) {
     const stopped = new Set(mission.flags.filter((f) => f.severity === "critical").map((f) => f.candidateId)).size;
     return stopped
-      ? `Risk Sentinel quarantined all ${stopped} listing(s) found, so nothing was bought.`
+      ? "None of the listings found were safe to buy, so nothing was bought."
       : "No safe listing matched this request, so nothing was bought.";
   }
   const items = mission.basket.map((l) => `${l.quantity} x ${l.title}`).join(", ") || "nothing";
   const failing = mission.checks.filter((c) => c.outcome !== "pass").map((c) => c.detail);
   const opening = `Chose ${items} for ${usd(mission.totalCents)}.`;
-  const quarantined = mission.flags.filter((f) => f.severity === "critical").length;
-  const risk = quarantined ? ` Risk Sentinel stopped ${quarantined} problem(s) in the listings.` : "";
-  if (mission.decision === "BLOCK") return `${opening} Blocked by policy: ${failing.join(" ")}${risk}`;
-  if (mission.decision === "NEEDS_HUMAN") return `${opening} Needs your approval: ${failing.join(" ")}${risk}`;
-  return `${opening} Every policy check passed, so no extra approval is needed.${risk}`;
+  if (mission.decision === "BLOCK") return `${opening} Blocked by policy: ${failing.join(" ")}`;
+  if (mission.decision === "NEEDS_HUMAN") return `${opening} Needs your approval: ${failing.join(" ")}`;
+  return `${opening} Every policy check passed, so no extra approval is needed.`;
 }
 
 const SummarySchema = z.object({ summary: z.string().min(1).max(500) });
@@ -322,7 +320,7 @@ export async function auditorAgent(mission: Mission) {
       total: usd(mission.totalCents),
       items: mission.basket.map((l) => ({ title: l.title, quantity: l.quantity, price: usd(l.priceCents), reason: l.reason })),
       failedChecks: mission.checks.filter((c) => c.outcome !== "pass"),
-      flags: mission.flags.map((f) => f.detail),
+      flags: mission.flags.filter((f) => f.severity === "warn").map((f) => f.detail),
     })}</untrusted>`,
     SummarySchema,
   );

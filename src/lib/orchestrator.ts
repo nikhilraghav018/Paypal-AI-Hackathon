@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { analystAgent, auditorAgent, basketTotal, intakeAgent, riskAgent, scoutAgent, summaryByRules } from "./agents";
+import { cartTotals, missionsReplacedByCart, removePurchased, reviewCart } from "./cart";
 import { GENESIS_HASH, hashEvent, issueMandate, mandateProblem } from "./integrity";
 import { captureOrder, createOrder, getOrderAmount, paypalConfigured, refundCapture, type PayPalWebhookEvent } from "./paypal";
 import { evaluatePolicy, usd } from "./policy";
@@ -214,6 +215,7 @@ async function startCheckout(mission: Mission, returnBaseUrl: string, emit?: Emi
       missionId: mission.id,
       basket: mission.basket,
       totalCents: mission.totalCents,
+      taxCents: mission.taxCents,
       returnUrl,
       cancelUrl: `${returnUrl}&cancelled=1`,
       revision: mission.revision,
@@ -295,6 +297,70 @@ export async function chooseProduct(id: string, query: string, candidateId: stri
   return mission;
 }
 
+/**
+ * Turns the cart into one order. Pressing pay on the exact total shown counts as the owner's
+ * approval, but a policy block still stops it, and every limit is checked again here.
+ */
+export async function checkoutCart(approvedTotalCents: unknown, returnBaseUrl: string): Promise<Mission> {
+  const state = getState();
+  if (!state.cart.length) throw new MissionError("Your cart is empty.");
+  const { subtotalCents, taxCents, totalCents } = cartTotals(state.cart);
+  if (approvedTotalCents !== totalCents) throw new MissionError("Your cart changed. Check the new total and try again.");
+
+  const review = reviewCart(new Date());
+  const units = state.cart.reduce((sum, item) => sum + item.quantity, 0);
+  const mission: Mission = {
+    id: randomUUID(),
+    fromCart: true,
+    prompt: `Cart checkout: ${units} item${units === 1 ? "" : "s"}`,
+    createdAt: new Date().toISOString(),
+    status: "RUNNING",
+    budgetCents: null,
+    requested: state.cart.map((item) => ({ query: item.query, quantity: item.quantity })),
+    basket: state.cart.map((item) => ({ ...item, reason: "You added this to your cart." })),
+    totalCents,
+    taxCents,
+    flags: review.flags,
+    decision: review.decision,
+    checks: review.checks,
+    events: [],
+  };
+  state.missions[mission.id] = mission;
+  mission.summary = summaryByRules(mission);
+
+  const titles = mission.basket.map((l) => `${l.quantity} x ${l.title}`).join(", ");
+  record(mission, "Intake", "rules", `Checking out your cart: ${titles}.`);
+  record(mission, "Scout", "rules", "No search needed, because you picked these from screened results.");
+  record(mission, "Risk Sentinel", "rules", `Screened ${state.cart.length} product(s) again before payment.`);
+  record(mission, "Deal Analyst", "rules", `${usd(subtotalCents)} plus ${usd(taxCents)} estimated tax comes to ${usd(totalCents)}.`);
+  const notPassed = review.checks.filter((c) => c.outcome !== "pass").map((c) => c.rule);
+  record(
+    mission,
+    "Policy Guardian",
+    "rules",
+    review.decision === "AUTO_APPROVE"
+      ? `All ${review.checks.length} checks passed.`
+      : `${review.decision === "BLOCK" ? "Blocked" : "Needs human approval"}: ${notPassed.join(", ")}.`,
+  );
+  record(mission, "Auditor", "rules", mission.summary);
+
+  if (review.decision === "BLOCK") {
+    mission.status = "BLOCKED";
+    saveState();
+    return mission;
+  }
+  if (review.decision === "NEEDS_HUMAN") record(mission, "Human", "rules", `Approved ${usd(totalCents)} by pressing pay on the cart.`);
+  for (const replaced of missionsReplacedByCart()) cancelCheckout(replaced.id);
+  try {
+    await startCheckout(mission, returnBaseUrl);
+  } catch (error) {
+    mission.status = "FAILED";
+    record(mission, "Treasurer", "rules", `Payment could not start: ${error instanceof Error ? error.message : "unknown error"}`);
+  }
+  saveState();
+  return mission;
+}
+
 export function rejectMission(id: string): Mission {
   const mission = requireMission(id);
   if (mission.status !== "NEEDS_HUMAN") throw new MissionError("This mission is not waiting for approval.");
@@ -329,7 +395,6 @@ export async function completePayment(id: string, token: string | null): Promise
     return mission;
   };
 
-  if (getState().policy.killSwitch) return fail("the kill switch was turned on before capture.");
   const problem = mandateProblem(mission.mandate, {
     missionId: id,
     amountCents: mission.totalCents,
@@ -357,6 +422,7 @@ export async function completePayment(id: string, token: string | null): Promise
 
   mission.status = "PAID";
   setLedger(id, "captured", mission);
+  if (mission.fromCart) removePurchased(mission.basket);
   saveState();
   return mission;
 }

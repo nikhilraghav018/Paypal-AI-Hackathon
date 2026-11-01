@@ -14,13 +14,16 @@ function modelsToTry(): string[] {
   return [...new Set([llmModel(), "gemini-3.1-flash-lite"])];
 }
 
-function isRateLimit(error: unknown): boolean {
-  return error instanceof Error && /\b429\b|RESOURCE_EXHAUSTED/.test(error.message);
+// A slow model would hold up the whole mission, and rules can take over if both models are busy.
+const CALL_TIMEOUT_MS = 8000;
+
+function isBusy(error: unknown): boolean {
+  return error instanceof Error && /\b(429|503)\b|RESOURCE_EXHAUSTED|UNAVAILABLE|abort|time(d )?out/i.test(`${error.name} ${error.message}`);
 }
 
 /**
  * Asks the model for JSON matching the schema. Returns null if no key is set, or
- * on any error, invalid output or rate limit, so each agent can use its rules.
+ * on any error, invalid output or when both models are busy, so each agent can use its rules.
  * Nothing here retries against a paid tier.
  */
 export async function askJson<T>(system: string, user: string, schema: z.ZodType<T>): Promise<T | null> {
@@ -34,6 +37,7 @@ export async function askJson<T>(system: string, user: string, schema: z.ZodType
         config: {
           systemInstruction: system,
           temperature: 0.2,
+          httpOptions: { timeout: CALL_TIMEOUT_MS },
           responseMimeType: "application/json",
           responseJsonSchema: z.toJSONSchema(schema),
         },
@@ -41,8 +45,8 @@ export async function askJson<T>(system: string, user: string, schema: z.ZodType
       const parsed = schema.safeParse(JSON.parse(response.text ?? ""));
       return parsed.success ? parsed.data : null;
     } catch (error) {
-      if (isRateLimit(error)) {
-        console.warn(`${model} is rate limited.`);
+      if (isBusy(error)) {
+        console.warn(`${model} is busy.`);
         continue;
       }
       console.warn("LLM call failed, using rules instead:", error instanceof Error ? error.message.slice(0, 200) : error);

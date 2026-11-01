@@ -12,7 +12,6 @@ const PolicyUpdate = z
     maxPurchasesPerDay: z.number().int().min(0).max(100),
     blockedCategories: z.array(z.string().trim().min(1).max(40)).max(30),
     blockedDomains: z.array(z.string().trim().toLowerCase().min(1).max(100)).max(50),
-    killSwitch: z.boolean(),
   })
   .partial();
 

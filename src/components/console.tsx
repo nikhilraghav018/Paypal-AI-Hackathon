@@ -1,9 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { AgentEvent, AgentName, Mission, Policy, StepSource, StreamMessage } from "@/lib/types";
+import Link from "next/link";
+import type { AgentEvent, AgentName, CartItem, Mission, Policy, StepSource, StreamMessage } from "@/lib/types";
 import { AGES, COLORS, CONDITIONS, GENDERS, preferenceLabels, type Preferences } from "@/lib/preferences";
 import { AgentCharacter, type CharacterState } from "./agent-character";
+import { Backdrop, type Outcome } from "./backdrop";
+import { OUTCOME_STYLE, STATUS } from "./mission-status";
+import { CartLink } from "./cart-link";
 
 const AGENTS: { name: AgentName; job: string }[] = [
   { name: "Intake", job: "Turns your request into a clear shopping mission" },
@@ -37,28 +41,6 @@ const SOURCE_LABEL: Record<StepSource, string> = {
   simulated: "Simulated",
 };
 
-type Outcome = "paid" | "blocked" | "cancelled" | "waiting" | "refunded";
-
-const OUTCOME_STYLE: Record<Outcome, { dot: string; card: string }> = {
-  paid: { dot: "#4ee0a6", card: "rgb(78 224 166 / 0.1)" },
-  blocked: { dot: "#ff6b5f", card: "rgb(255 107 95 / 0.1)" },
-  cancelled: { dot: "#8b93a1", card: "rgb(139 147 161 / 0.1)" },
-  waiting: { dot: "#f0c56c", card: "rgb(240 197 108 / 0.09)" },
-  refunded: { dot: "#7db7ff", card: "rgb(125 183 255 / 0.1)" },
-};
-
-const STATUS: Record<Mission["status"], { label: string; tone: string; outcome: Outcome }> = {
-  RUNNING: { label: "Running", tone: "bg-line text-ink", outcome: "waiting" },
-  NEEDS_HUMAN: { label: "Needs your approval", tone: "bg-warn-soft text-warn", outcome: "waiting" },
-  AWAITING_PAYER: { label: "Cleared, awaiting PayPal", tone: "bg-warn-soft text-warn", outcome: "waiting" },
-  PAID: { label: "Bought", tone: "bg-accent-soft text-accent", outcome: "paid" },
-  REFUNDED: { label: "Refunded", tone: "bg-line text-ink", outcome: "refunded" },
-  BLOCKED: { label: "Blocked", tone: "bg-danger-soft text-danger", outcome: "blocked" },
-  REJECTED: { label: "Cancelled by you", tone: "bg-line text-ink", outcome: "cancelled" },
-  CANCELLED: { label: "Cancelled by you", tone: "bg-line text-ink", outcome: "cancelled" },
-  FAILED: { label: "Stopped safely", tone: "bg-danger-soft text-danger", outcome: "blocked" },
-};
-
 /** Turns a sentence or two into short points. Decimals are safe because a split needs a following space. */
 function toBullets(text: string): string[] {
   return text
@@ -88,17 +70,6 @@ function agentFailed(agent: AgentName, event: AgentEvent): boolean {
   return failure[agent]?.test(event.message) ?? false;
 }
 
-function Backdrop({ tone }: { tone?: Outcome }) {
-  return (
-    <div className="backdrop" data-tone={tone} aria-hidden>
-      {tone !== undefined && <div className="rings" />}
-      <div className="orb orb-a" />
-      <div className="orb orb-b" />
-      <div className="orb orb-c" />
-    </div>
-  );
-}
-
 type MissionAction = "approve" | "reject" | "cancel" | "refund";
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -112,7 +83,7 @@ interface Status {
 function Panel({ title, children, className = "" }: { title: string; children: React.ReactNode; className?: string }) {
   return (
     <section className={`neu min-w-0 rounded-3xl p-5 sm:p-6 ${className}`}>
-      <h2 className="mb-4 text-lg font-semibold tracking-tight">{title}</h2>
+      <h2 className="section-title mb-4 text-lg font-semibold tracking-tight">{title}</h2>
       {children}
     </section>
   );
@@ -165,7 +136,7 @@ function PolicyPanel({
   );
   const percent = policy.monthlyBudgetCents ? Math.min(100, (committed / policy.monthlyBudgetCents) * 100) : 100;
   return (
-    <Panel title="Agent allowance">
+    <Panel title="Budget">
       <div className="mb-1 flex justify-between text-sm">
         <span className="font-mono">{money(committed)}</span>
         <span className="text-muted">of {money(policy.monthlyBudgetCents)} this month</span>
@@ -253,6 +224,27 @@ function PreferenceSelect({
   );
 }
 
+function AddToCart({
+  count,
+  busy,
+  onAdd,
+  full = false,
+}: {
+  count: number;
+  busy: boolean;
+  onAdd: () => void;
+  full?: boolean;
+}) {
+  return (
+    <span className={`inline-flex items-center gap-2 ${full ? "justify-end" : ""}`}>
+      <button type="button" disabled={busy} onClick={onAdd} className="btn btn-quiet px-3 py-1.5 text-xs whitespace-nowrap">
+        Add to cart
+      </button>
+      {count > 0 && <span className="text-xs whitespace-nowrap text-accent">{count} in cart</span>}
+    </span>
+  );
+}
+
 const EXPLORE_PAGE = 5;
 
 function Explore({
@@ -260,11 +252,17 @@ function Explore({
   query,
   busy,
   onChoose,
+  cart,
+  onAdd,
+  children,
 }: {
   mission: Mission;
   query: string;
   busy: boolean;
   onChoose: (query: string, candidateId: string) => void;
+  cart: CartItem[];
+  onAdd: (candidateId: string) => void;
+  children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [shown, setShown] = useState(EXPLORE_PAGE);
@@ -274,13 +272,18 @@ function Explore({
   const selected = mission.basket.find((l) => l.query === query)?.id;
   const canChange = ["NEEDS_HUMAN", "AWAITING_PAYER", "BLOCKED"].includes(mission.status);
   const others = options.filter((c) => c.id !== selected).length;
-  if (!canChange || others === 0) return null;
+  const canExplore = canChange && others > 0;
   return (
-    <div className="mt-2">
-      <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="btn btn-quiet px-3 py-1.5 text-xs">
-        {open ? "Hide products" : `Explore ${others} more product${others === 1 ? "" : "s"}`}
-      </button>
-      {open && (
+    <div className="mt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {canExplore && (
+          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="btn btn-quiet px-3 py-1.5 text-xs">
+            {open ? "Hide products" : `Explore ${others} more product${others === 1 ? "" : "s"}`}
+          </button>
+        )}
+        {children}
+      </div>
+      {canExplore && open && (
         <fieldset className="mt-3 space-y-2" disabled={busy}>
           <legend className="sr-only">Choose a product for {query}</legend>
           {options.slice(0, shown).map((option) => (
@@ -322,7 +325,15 @@ function Explore({
                   )}
                 </span>
               </span>
-              <span className="shrink-0 font-mono text-sm">{money(option.priceCents * option.quantity)}</span>
+              <span className="flex shrink-0 flex-col items-end gap-1.5">
+                <span className="font-mono text-sm">{money(option.priceCents * option.quantity)}</span>
+                <AddToCart
+                  full
+                  busy={busy}
+                  count={cart.find((item) => item.id === option.id)?.quantity ?? 0}
+                  onAdd={() => onAdd(option.id)}
+                />
+              </span>
             </label>
           ))}
           {shown < options.length && (
@@ -341,17 +352,20 @@ function Decision({
   busy,
   onAction,
   onChoose,
+  cart,
+  onAdd,
 }: {
   mission: Mission;
   busy: boolean;
   onAction: (action: MissionAction) => void;
   onChoose: (query: string, candidateId: string) => void;
+  cart: CartItem[];
+  onAdd: (candidateId: string) => void;
 }) {
   const status =
     mission.status === "BLOCKED" && mission.basket.length === 0 && !mission.flags.some((f) => f.severity === "critical")
       ? { label: "No safe match found", tone: "bg-warn-soft text-warn" }
       : STATUS[mission.status];
-  const quarantined = mission.flags.filter((f) => f.severity === "critical");
   return (
     <Panel title="Decision">
       <span className={`inline-block rounded-xl px-3 py-1 text-sm font-semibold ${status.tone}`}>{status.label}</span>
@@ -360,7 +374,7 @@ function Decision({
       {mission.basket.length > 0 && (
         <ul className="mt-4 divide-y divide-line border-y border-line">
           {mission.basket.map((line) => (
-            <li key={line.query} className="py-3 text-sm">
+            <li key={mission.fromCart ? line.id : line.query} className="py-3 text-sm">
               <div className="flex justify-between gap-3">
                 <span className="font-medium">
                   {line.quantity > 1 ? `${line.quantity} x ` : ""}
@@ -385,9 +399,25 @@ function Decision({
                 )}
               </p>
               <p className="mt-1 text-xs text-muted">{line.reason}</p>
-              <Explore key={line.query} mission={mission} query={line.query} busy={busy} onChoose={onChoose} />
+              {!mission.fromCart && (
+                <Explore key={line.query} mission={mission} query={line.query} busy={busy} onChoose={onChoose} cart={cart} onAdd={onAdd}>
+                  <AddToCart busy={busy} count={cart.find((item) => item.id === line.id)?.quantity ?? 0} onAdd={() => onAdd(line.id)} />
+                </Explore>
+              )}
             </li>
           ))}
+          {Boolean(mission.taxCents) && (
+            <li className="py-2 text-sm text-muted">
+              <div className="flex justify-between">
+                <span>Subtotal</span>
+                <span className="font-mono">{money(mission.totalCents - mission.taxCents!)}</span>
+              </div>
+              <div className="mt-1 flex justify-between">
+                <span>Estimated tax</span>
+                <span className="font-mono">{money(mission.taxCents!)}</span>
+              </div>
+            </li>
+          )}
           <li className="flex justify-between py-2 text-sm font-semibold">
             <span>Total</span>
             <span className="font-mono">{money(mission.totalCents)}</span>
@@ -442,24 +472,12 @@ function Decision({
           </ul>
         </details>
       )}
-
-      {quarantined.length > 0 && (
-        <div className="mt-4 rounded-xl bg-danger-soft p-3 text-sm">
-          <p className="font-medium text-danger">Quarantined listings ({quarantined.length})</p>
-          <ul className="mt-1 space-y-1">
-            {quarantined.map((flag, i) => (
-              <li key={i}>
-                <span className="font-mono text-xs">{flag.code}</span> {flag.detail}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
     </Panel>
   );
 }
 
 function AuditTrail({ mission }: { mission: Mission }) {
+  const [open, setOpen] = useState(false);
   const [verified, setVerified] = useState<{ count: number; text: string; ok: boolean } | null>(null);
   const shown = verified && verified.count === mission.events.length ? verified : null;
   const verify = async () => {
@@ -472,36 +490,66 @@ function AuditTrail({ mission }: { mission: Mission }) {
     });
   };
   return (
-    <Panel title="Audit trail">
-      <ol className="space-y-2">
-        {mission.events.map((event) => (
-          <li key={event.seq} className="text-sm">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">{event.agent}</span>
-              <SourceTag source={event.source} />
-              <span className="font-mono text-[11px] text-muted" title={event.hash}>
-                {new Date(event.at).toLocaleTimeString()} · {event.hash.slice(0, 10)}
-              </span>
-            </div>
-            <p className="break-words text-muted">{event.message}</p>
-          </li>
-        ))}
-      </ol>
-      <div className="mt-4 flex flex-wrap items-center gap-3">
-        <button onClick={verify} className="btn btn-quiet">
-          Verify hash chain
-        </button>
-        {shown && <span className={`text-sm ${shown.ok ? "text-accent" : "text-danger"}`} role="status">{shown.text}</span>}
-      </div>
-    </Panel>
+    <section className="neu min-w-0 rounded-3xl p-5 sm:p-6">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 text-left"
+      >
+        <h2 className="section-title text-lg font-semibold tracking-tight">Audit trail</h2>
+        <span className="flex items-center gap-2 text-sm text-muted">
+          {open ? "Hide" : `Show ${mission.events.length} entries`}
+          <svg
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+            aria-hidden
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </span>
+      </button>
+      {open && (
+        <div className="view-enter mt-4">
+          <ol className="space-y-3">
+            {mission.events.map((event) => (
+              <li key={event.seq} className="text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{event.agent}</span>
+                  <SourceTag source={event.source} />
+                  <span className="font-mono text-[11px] text-muted" title={event.hash}>
+                    {new Date(event.at).toLocaleTimeString()} · {event.hash.slice(0, 10)}
+                  </span>
+                </div>
+                <p className="mt-0.5 break-words text-muted">{event.message}</p>
+              </li>
+            ))}
+          </ol>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button onClick={verify} className="btn btn-quiet">
+              Verify hash chain
+            </button>
+            {shown && <span className={`text-sm ${shown.ok ? "text-accent" : "text-danger"}`} role="status">{shown.text}</span>}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
 async function loadSnapshot() {
-  const [policyRes, missionsRes] = await Promise.all([fetch("/api/policy"), fetch("/api/missions")]);
+  const [policyRes, missionsRes, cartRes] = await Promise.all([fetch("/api/policy"), fetch("/api/missions"), fetch("/api/cart")]);
   const { policy, committedCents } = (await policyRes.json()) as { policy: Policy; committedCents: number };
   const { missions } = (await missionsRes.json()) as { missions: Mission[] };
-  return { policy, committedCents, missions };
+  const { items: cart } = (await cartRes.json()) as { items: CartItem[] };
+  return { policy, committedCents, missions, cart };
 }
 
 export function Console() {
@@ -518,11 +566,13 @@ export function Console() {
   const [live, setLive] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [cart, setCart] = useState<CartItem[]>([]);
 
   const applySnapshot = useCallback((snapshot: Awaited<ReturnType<typeof loadSnapshot>>) => {
     setPolicy(snapshot.policy);
     setCommitted(snapshot.committedCents);
     setHistory(snapshot.missions);
+    setCart(snapshot.cart);
   }, []);
 
   const refresh = useCallback(async () => applySnapshot(await loadSnapshot()), [applySnapshot]);
@@ -621,6 +671,15 @@ export function Console() {
     }
   };
 
+  const addToCart = async (candidateId: string) => {
+    if (!mission) return;
+    setNotice("");
+    const res = await fetch("/api/cart", { method: "POST", body: JSON.stringify({ missionId: mission.id, candidateId }) });
+    const data = (await res.json()) as { items?: CartItem[]; error?: string };
+    if (data.items) setCart(data.items);
+    if (data.error) setNotice(data.error);
+  };
+
   const goHome = () => {
     setLive(false);
     setMission(null);
@@ -668,6 +727,11 @@ export function Console() {
           );
         })}
       </ul>
+      {history.length > 0 && (
+        <Link href="/missions" className="btn btn-quiet mt-4 block text-center">
+          View all
+        </Link>
+      )}
     </Panel>
   );
 
@@ -675,26 +739,18 @@ export function Console() {
     <div className="mx-auto w-full max-w-[86rem] px-4 py-5 sm:px-8">
       <Backdrop tone={onLanding ? undefined : tone} />
       <header className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold tracking-tight">
-          <button onClick={goHome} disabled={running}>Agent Allowance</button>
+        <h1 className="brand">
+          <button onClick={goHome} disabled={running}>Velora</button>
         </h1>
         <div className="flex flex-wrap items-center gap-2">
           {status && (
-            <>
+            <div className="hidden flex-wrap items-center gap-2 sm:flex">
               <Chip on={Boolean(status.ai)}>AI: {status.ai ?? "rules only"}</Chip>
               <Chip on={status.catalog === "channel3"}>Catalog: {status.catalog === "channel3" ? "Channel3" : "sample"}</Chip>
               <Chip on={status.payments === "sandbox"}>Payments: {status.payments === "sandbox" ? "PayPal sandbox" : "simulated"}</Chip>
-            </>
+            </div>
           )}
-          {policy && (
-            <button
-              aria-pressed={policy.killSwitch}
-              onClick={() => savePolicy({ killSwitch: !policy.killSwitch })}
-              className={`btn ${policy.killSwitch ? "btn-danger" : "btn-quiet kill-switch"}`}
-            >
-              {policy.killSwitch ? "Spending frozen: resume" : "Kill switch"}
-            </button>
-          )}
+          <CartLink count={cart.reduce((sum, item) => sum + item.quantity, 0)} />
         </div>
       </header>
 
@@ -711,17 +767,16 @@ export function Console() {
 
       {onLanding ? (
         <main className="view-enter">
-          <div className={`relative mt-6 transition-[min-height] duration-300 ${customizing ? "lg:min-h-[46rem]" : "lg:min-h-[39rem]"}`}>
+          <div className={`relative mt-6 transition-[min-height] duration-300 ${customizing ? "xl:min-h-[46rem]" : "xl:min-h-[39rem]"}`}>
             {SCATTER.map(({ name, style, size, delay }) => (
-              <div key={name} className="agent-spot absolute hidden flex-col items-center lg:flex" style={style}>
+              <div key={name} className="agent-spot absolute hidden flex-col items-center xl:flex" style={style}>
                 <div className="agent-float" style={{ animationDelay: delay }}>
                   <AgentCharacter agent={name} size={size} />
                 </div>
-                <span className="display neu-inset mt-1 rounded-full px-3 py-0.5 text-xs font-medium text-muted">{name}</span>
               </div>
             ))}
 
-            <div className="relative z-10 mx-auto max-w-2xl pt-10 text-center lg:pt-16">
+            <div className="relative z-10 mx-auto max-w-2xl pt-10 text-center xl:pt-16">
               <h2 className="text-[clamp(2.5rem,5.4vw,4.3rem)] font-bold leading-[1.03] tracking-tight">
                 Purchase with your <span className="text-accent">AI agents.</span>
               </h2>
@@ -774,7 +829,7 @@ export function Console() {
               )}
             </div>
 
-            <div className="mt-8 flex flex-wrap justify-center gap-3 lg:hidden">
+            <div className="mt-8 flex flex-wrap justify-center gap-3 xl:hidden">
               {AGENTS.map(({ name }) => (
                 <AgentCharacter key={name} agent={name} size={66} className="agent-float" />
               ))}
@@ -821,8 +876,8 @@ export function Console() {
           <div className="space-y-6">
             {mission ? (
               <>
-                <Decision mission={mission} busy={busy} onAction={act} onChoose={choose} />
-                <AuditTrail mission={mission} />
+                <Decision mission={mission} busy={busy} onAction={act} onChoose={choose} cart={cart} onAdd={addToCart} />
+                <AuditTrail key={mission.id} mission={mission} />
               </>
             ) : (
               <Panel title="Decision">

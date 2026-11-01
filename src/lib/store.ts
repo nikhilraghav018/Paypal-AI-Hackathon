@@ -1,24 +1,38 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_POLICY } from "./policy";
-import type { LedgerEntry, Mission, Policy } from "./types";
+import type { BasketLine, CartItem, LedgerEntry, Mission, Policy } from "./types";
 
 export interface AppState {
   policy: Policy;
   ledger: LedgerEntry[];
   missions: Record<string, Mission>;
   seenWebhookIds: string[];
+  cart: CartItem[];
   schemaVersion?: number;
 }
 
 const DATA_FILE = path.join(process.cwd(), ".data", "state.json");
 const holder = globalThis as unknown as { __agentAllowance?: AppState };
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 5;
 
 /** Version 2 allows gift cards, so saved settings and missions blocked for that reason are cleared once. */
 function migrate(state: AppState): void {
   if ((state.schemaVersion ?? 1) >= SCHEMA_VERSION) return;
+  state.cart ??= [];
+  delete (state.policy as Policy & { killSwitch?: boolean }).killSwitch;
+  // Version 4 keeps only the cart order once a cart is paid, so earlier leftovers are cleared once.
+  for (const mission of Object.values(state.missions)) {
+    if (!mission.fromCart || (mission.status !== "PAID" && mission.status !== "REFUNDED")) continue;
+    for (const line of mission.basket as (BasketLine & { sourceMissionId?: string })[]) {
+      const source = line.sourceMissionId ? state.missions[line.sourceMissionId] : undefined;
+      if (!source || source.status === "PAID" || source.status === "REFUNDED") continue;
+      if (state.cart.some((item) => item.sourceMissionId === source.id)) continue;
+      delete state.missions[source.id];
+      state.ledger = state.ledger.filter((e) => e.missionId !== source.id);
+    }
+  }
   state.policy.blockedCategories = state.policy.blockedCategories.filter((c) => c !== "gift cards");
   for (const mission of Object.values(state.missions)) {
     if (mission.status === "BLOCKED" && /gift ?card/i.test(mission.prompt)) delete state.missions[mission.id];
@@ -27,7 +41,7 @@ function migrate(state: AppState): void {
 }
 
 function freshState(): AppState {
-  return { policy: { ...DEFAULT_POLICY }, ledger: [], missions: {}, seenWebhookIds: [], schemaVersion: SCHEMA_VERSION };
+  return { policy: { ...DEFAULT_POLICY }, ledger: [], missions: {}, seenWebhookIds: [], cart: [], schemaVersion: SCHEMA_VERSION };
 }
 
 export function getState(): AppState {

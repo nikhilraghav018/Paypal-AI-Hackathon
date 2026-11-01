@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cheapestBasket, intakeByRules, parseBudgetCents, preferencesByRules, riskRules } from "@/lib/agents";
 import { keepColorMatches, parseChannel3, preferenceFilters, queryWithColor } from "@/lib/catalog";
 import { firstBrokenEvent, issueMandate, mandateProblem } from "@/lib/integrity";
-import { applyWebhookEvent, approveMission, cancelCheckout, chooseProduct, completePayment, refundMission, rejectMission, runMission } from "@/lib/orchestrator";
+import { addToCart, cartTotals, removeFromCart, reviewCart, setCartQuantity } from "@/lib/cart";
+import { applyWebhookEvent, approveMission, cancelCheckout, checkoutCart, chooseProduct, completePayment, refundMission, rejectMission, runMission } from "@/lib/orchestrator";
 import { PAYPAL_BASE_URL, buildOrderBody, verifyWebhook } from "@/lib/paypal";
 import { DEFAULT_POLICY, committedThisMonth, evaluatePolicy, restrictedCategory } from "@/lib/policy";
 import { getState, resetState } from "@/lib/store";
@@ -35,8 +36,6 @@ describe("policy guardian", () => {
   it("escalates above the auto-approve limit", () => expect(evaluate({ totalCents: 5001 }).decision).toBe("NEEDS_HUMAN"));
   it("blocks above the per-purchase limit", () => expect(evaluate({ totalCents: 20001 }).decision).toBe("BLOCK"));
   it("blocks when over the mission budget", () => expect(evaluate({ budgetCents: 999 }).decision).toBe("BLOCK"));
-  it("blocks everything when the kill switch is on", () =>
-    expect(evaluate({ policy: { ...DEFAULT_POLICY, killSwitch: true } }).decision).toBe("BLOCK"));
   it("blocks restricted categories even if earlier agents missed them", () =>
     expect(evaluate({ basket: [line({ title: "Red Wine Set" })] }).decision).toBe("BLOCK"));
   it("blocks non-USD prices", () => expect(evaluate({ basket: [line({ currency: "EUR" })] }).decision).toBe("BLOCK"));
@@ -197,14 +196,6 @@ describe("full mission without any keys", () => {
     expect(after.policy.blockedCategories).toEqual(["alcohol"]);
   });
 
-  it("refuses to capture after the kill switch is turned on", async () => {
-    const mission = await runMission("buy pens under $20", BASE);
-    getState().policy.killSwitch = true;
-    const result = await completePayment(mission.id, mission.orderId!);
-    expect(result.status).toBe("FAILED");
-    expect(committedThisMonth(getState().ledger, new Date())).toBe(0);
-  });
-
   it("refuses a capture with the wrong order token", async () => {
     const mission = await runMission("buy pens under $20", BASE);
     await expect(completePayment(mission.id, "OTHER")).rejects.toThrow(/does not match/);
@@ -339,9 +330,9 @@ describe("PayPal sandbox failures", () => {
 });
 
 describe("blocked goods message", () => {
-  it("says listings were quarantined rather than not found", async () => {
+  it("says the listings were unsafe rather than not found", async () => {
     const mission = await runMission("buy a red wine sampler", BASE);
-    expect(mission.summary).toMatch(/quarantined all 1 listing/);
+    expect(mission.summary).toMatch(/None of the listings found were safe/);
   });
 });
 
@@ -444,5 +435,141 @@ describe("choosing another product", () => {
     const mission = await start();
     await completePayment(mission.id, mission.orderId!);
     await expect(chooseProduct(mission.id, "pens", "pen-1", BASE)).rejects.toThrow(/no longer/);
+  });
+});
+
+describe("cart", () => {
+  const search = () => runMission("buy pens and copy paper under $30", BASE);
+  const total = () => cartTotals(getState().cart).totalCents;
+
+  it("adds only screened listings, at the catalog price, and merges repeats", async () => {
+    const mission = await search();
+    expect(() => addToCart(mission.id, "pen-4")).toThrow(/screened/);
+    addToCart(mission.id, "pen-1");
+    addToCart(mission.id, "pen-1");
+    expect(getState().cart).toHaveLength(1);
+    expect(getState().cart[0]).toMatchObject({ priceCents: 1299, quantity: 2 });
+  });
+
+  it("adds tax to the total and limits quantity", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    expect(cartTotals(getState().cart)).toEqual({ subtotalCents: 1299, taxCents: 104, totalCents: 1403 });
+    expect(() => setCartQuantity("pen-1", 11)).toThrow(/between/);
+    expect(() => setCartQuantity("pen-1", 0)).toThrow(/between/);
+    removeFromCart("pen-1");
+    expect(getState().cart).toHaveLength(0);
+  });
+
+  it("sends tax to PayPal so the breakdown adds up", () => {
+    const body = buildOrderBody({ missionId: "m", basket: [line({ quantity: 2 })], totalCents: 2160, taxCents: 160, returnUrl: BASE, cancelUrl: BASE });
+    expect(body.purchase_units[0].amount).toMatchObject({
+      value: "21.60",
+      breakdown: { item_total: { value: "20.00" }, tax_total: { value: "1.60" } },
+    });
+  });
+
+  it("refuses a total the owner did not see, and an empty cart", async () => {
+    await expect(checkoutCart(100, BASE)).rejects.toThrow(/empty/);
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    await expect(checkoutCart(100, BASE)).rejects.toThrow(/changed/);
+  });
+
+  it("pays for several products at once, then empties what was bought", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    addToCart(mission.id, mission.basket.find((l) => l.query !== "pens")!.id);
+    const order = await checkoutCart(total(), BASE);
+    expect(order.status).toBe("AWAITING_PAYER");
+    expect(order.basket).toHaveLength(2);
+    expect(order.taxCents).toBeGreaterThan(0);
+    expect(getState().cart).toHaveLength(2);
+    expect((await completePayment(order.id, order.orderId!)).status).toBe("PAID");
+    expect(getState().cart).toHaveLength(0);
+    expect(getState().ledger.find((e) => e.missionId === order.id)?.cents).toBe(order.totalCents);
+  });
+
+  it("keeps only the cart order once it is paid", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    const order = await checkoutCart(total(), BASE);
+    await completePayment(order.id, order.orderId!);
+    expect(getState().missions[mission.id]).toBeUndefined();
+    expect(getState().ledger.some((e) => e.missionId === mission.id)).toBe(false);
+    expect(getState().missions[order.id].status).toBe("PAID");
+  });
+
+  it("keeps a search that was bought separately, or still has an item in the cart", async () => {
+    const paid = await search();
+    addToCart(paid.id, "pen-1");
+    await completePayment(paid.id, paid.orderId!);
+    const order = await checkoutCart(total(), BASE);
+    await completePayment(order.id, order.orderId!);
+    expect(getState().missions[paid.id].status).toBe("PAID");
+
+    const open = await search();
+    addToCart(open.id, "pen-1");
+    const next = await checkoutCart(total(), BASE);
+    addToCart(open.id, open.basket.find((l) => l.query !== "pens")!.id);
+    await completePayment(next.id, next.orderId!);
+    expect(getState().missions[open.id]).toBeDefined();
+    expect(getState().cart).toHaveLength(1);
+  });
+
+  it("releases the single order an item came from, so nothing is bought or counted twice", async () => {
+    const mission = await search();
+    expect(mission.status).toBe("AWAITING_PAYER");
+    addToCart(mission.id, "pen-1");
+    const order = await checkoutCart(total(), BASE);
+    expect(mission.status).toBe("CANCELLED");
+    expect(committedThisMonth(getState().ledger, new Date())).toBe(order.totalCents);
+    await expect(completePayment(mission.id, mission.orderId!)).rejects.toThrow(/not awaiting/);
+  });
+
+  it("replaces an unfinished cart order instead of holding the budget twice", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    const first = await checkoutCart(total(), BASE);
+    const second = await checkoutCart(total(), BASE);
+    expect(first.status).toBe("CANCELLED");
+    expect(second.status).toBe("AWAITING_PAYER");
+    expect(committedThisMonth(getState().ledger, new Date())).toBe(second.totalCents);
+  });
+
+  it("keeps the cart when PayPal is cancelled", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    const order = await checkoutCart(total(), BASE);
+    cancelCheckout(order.id);
+    expect(getState().cart).toHaveLength(1);
+  });
+
+  it("still lets policy block a cart, even though pressing pay approves it", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    getState().policy.perPurchaseLimitCents = 100;
+    expect(reviewCart(new Date()).decision).toBe("BLOCK");
+    const order = await checkoutCart(total(), BASE);
+    expect(order.status).toBe("BLOCKED");
+    expect(order.orderId).toBeUndefined();
+    expect(mission.status).toBe("AWAITING_PAYER");
+  });
+
+  it("treats pressing pay as approval above the auto-approve limit", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    getState().policy.autoApproveLimitCents = 100;
+    const order = await checkoutCart(total(), BASE);
+    expect(order.decision).toBe("NEEDS_HUMAN");
+    expect(order.status).toBe("AWAITING_PAYER");
+    expect(order.events.some((e) => e.agent === "Human" && /Approved/.test(e.message))).toBe(true);
+  });
+
+  it("does not let a cart order swap products", async () => {
+    const mission = await search();
+    addToCart(mission.id, "pen-1");
+    const order = await checkoutCart(total(), BASE);
+    await expect(chooseProduct(order.id, "pens", "pen-2", BASE)).rejects.toThrow(/screened/);
   });
 });

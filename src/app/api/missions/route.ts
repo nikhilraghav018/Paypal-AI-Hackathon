@@ -21,7 +21,7 @@ const recentRuns: number[] = [];
 
 export async function GET() {
   const missions = Object.values(getState().missions).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  return Response.json({ missions: missions.slice(0, 20) });
+  return Response.json({ missions });
 }
 
 export async function POST(request: NextRequest) {
