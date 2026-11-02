@@ -15,10 +15,11 @@ function modelsToTry(): string[] {
 }
 
 // A slow model would hold up the whole mission, and rules can take over if both models are busy.
-const CALL_TIMEOUT_MS = 8000;
+// Gemini refuses any deadline under 10 seconds, failing every call.
+const CALL_TIMEOUT_MS = 12000;
 
 function isBusy(error: unknown): boolean {
-  return error instanceof Error && /\b(429|503)\b|RESOURCE_EXHAUSTED|UNAVAILABLE|abort|time(d )?out/i.test(`${error.name} ${error.message}`);
+  return error instanceof Error && /\b(429|503|504)\b|RESOURCE_EXHAUSTED|UNAVAILABLE|DEADLINE_EXCEEDED|abort|time(d )?out/i.test(`${error.name} ${error.message}`);
 }
 
 /**

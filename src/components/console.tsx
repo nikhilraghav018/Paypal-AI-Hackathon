@@ -397,6 +397,49 @@ function Explore({
   );
 }
 
+const AUTOPAY_NOTICE = {
+  revoked: {
+    title: "Autopay is off",
+    body: "Your saved PayPal account no longer lets Velora pay, so it may have been removed under automatic payments in PayPal. Approve this payment on PayPal, and connect PayPal again under Budget if you want agents to pay by themselves.",
+  },
+  failed: {
+    title: "Autopay couldn't pay this time",
+    body: "PayPal didn't accept the charge to your saved account, so nothing was paid. Approve this payment on PayPal instead.",
+  },
+};
+
+/** Explains why a purchase that autopay would have covered is waiting on PayPal's page. */
+function AutopayNotice({ mission }: { mission: Mission }) {
+  const key = `velora-autopay-notice-${mission.id}`;
+  // Missions load in the browser, so this never renders on the server and can read storage directly.
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return localStorage.getItem(key) === "dismissed";
+    } catch {
+      return false;
+    }
+  });
+  if (hidden || !mission.autopayFailed) return null;
+  const notice = AUTOPAY_NOTICE[mission.autopayFailed];
+  const dismiss = () => {
+    setHidden(true);
+    try {
+      localStorage.setItem(key, "dismissed");
+    } catch {}
+  };
+  return (
+    <div className="mt-4 flex items-start gap-3 rounded-2xl bg-warn-soft p-3 text-sm text-warn" role="status">
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">{notice.title}</p>
+        <p className="mt-0.5">{notice.body}</p>
+      </div>
+      <button type="button" onClick={dismiss} aria-label="Dismiss" className="-m-1 shrink-0 rounded-lg px-2 py-1 text-base leading-none hover:bg-black/20">
+        ×
+      </button>
+    </div>
+  );
+}
+
 function Decision({
   mission,
   busy,
@@ -474,6 +517,8 @@ function Decision({
           </li>
         </ul>
       )}
+
+      {mission.status === "AWAITING_PAYER" && <AutopayNotice key={mission.id} mission={mission} />}
 
       <div className="mt-4 flex flex-wrap gap-2">
         {mission.status === "NEEDS_HUMAN" && (

@@ -124,6 +124,8 @@ export interface Mission {
   safetyTest?: boolean;
   /** PayPal took the payment but has not finished settling it. */
   capturePending?: boolean;
+  /** Autopay tried the saved account first and could not pay; "revoked" means the owner removed it in PayPal. */
+  autopayFailed?: "revoked" | "failed";
   /** Times PayPal declined the funding source, so a retry counts as a new capture. */
   declines?: number;
   /** Part of totalCents. Only cart orders carry tax. */

@@ -135,9 +135,10 @@ export function CartPage() {
         setBusy(false);
         return;
       }
-      const { status, approvalUrl, id, capturePending } = data.mission;
+      const { status, approvalUrl, id, capturePending, autopayFailed } = data.mission;
       const missionId = encodeURIComponent(id);
-      if (status === "AWAITING_PAYER" && approvalUrl) window.location.assign(approvalUrl);
+      // When autopay failed, the order page explains why before sending the owner to PayPal.
+      if (status === "AWAITING_PAYER" && approvalUrl && !autopayFailed) window.location.assign(approvalUrl);
       else router.push(status === "PAID" && !capturePending ? `/paid?mission=${missionId}` : `/?mission=${missionId}`);
     } catch {
       setNotice("Checkout failed. Nothing was charged.");

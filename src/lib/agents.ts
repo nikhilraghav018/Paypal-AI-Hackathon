@@ -118,10 +118,50 @@ export async function intakeAgent(prompt: string, chosen: Preferences = {}) {
 
 const RelevanceSchema = z.object({ keep: z.array(z.number().int()) });
 
+// Catalogs answer "chocolate cookies" with cookie wall art, cookie cologne and dog cookies. Each
+// of these aisles is dropped unless the search itself asks for that kind of thing.
+const THEMED_AISLES: [aisle: RegExp, wanted: RegExp][] = [
+  [/artwork|posters|prints/i, /\b(art|poster|print|canvas|painting|wall)/i],
+  [/\bbooks\b|reading toys/i, /\b(book|novel|cookbook|guide|edition|paperback|hardcover)/i],
+  [/costume/i, /\b(costume|halloween|dress[- ]up|cosplay)/i],
+  [/ornament/i, /\b(ornament|christmas|holiday decor)/i],
+  [/perfume|cologne|fragrance/i, /\b(perfume|cologne|fragrance|scent|mist|spray)/i],
+  [/pet supplies|horse (care|treats)/i, /\b(dog|cat|pet|pupp|kitten|horse|bird|fish|hamster|rabbit)/i],
+  [/play food|pretend play|toy kitchen/i, /\b(toy|play|pretend)/i],
+  [/throw pillows/i, /\b(pillow|cushion)/i],
+  [/blankets/i, /\b(blanket|throw)/i],
+  [/t-shirts|shirts & tops/i, /\b(shirt|tee|top)/i],
+  [/charms|jewelry/i, /\b(charm|jibbitz|necklace|bracelet|pendant|jewel)/i],
+  [/artificial|vase fillers/i, /\b(artificial|fake|faux|decor|vase)/i],
+  [/recipe card/i, /\b(recipe|card)/i],
+  [/arts & crafts|fabric/i, /\b(craft|fabric|sewing|quilt|diy|sticker)/i],
+  [/paper products|stationery/i, /\b(paper|letterhead|stationery|notebook|journal|notepad|planner|envelope)/i],
+];
+
+/** Drops listings that only borrow the product's name, such as a cookie ornament for "cookies". */
+export function dropThemedLookalikes(candidates: Candidate[]): Candidate[] {
+  return candidates.filter((c) => !THEMED_AISLES.some(([aisle, wanted]) => aisle.test(c.category) && !wanted.test(c.query)));
+}
+
+/** Singular forms of a word, so "cookies" matches "cookie" and "batteries" matches "battery". */
+function singulars(word: string): string[] {
+  const w = word.toLowerCase();
+  return [w, w.replace(/ies$/, "y"), w.replace(/es$/, ""), w.replace(/s$/, "")];
+}
+
+/** Without AI, a listing must at least name what was searched for, such as "cookie" for "chocolate cookies". */
+export function namesSearchedProduct(candidate: Candidate): boolean {
+  const words = candidate.query.split(/[^a-z0-9]+/i).filter((w) => w.length > 1 && !/^(for|with|and|under|men|women|kids)$/i.test(w));
+  const product = words.at(-1);
+  if (!product) return true;
+  const named = new Set(`${candidate.title} ${candidate.category}`.split(/[^a-z0-9]+/i).flatMap(singulars));
+  return singulars(product).some((form) => named.has(form));
+}
+
 /** Search engines return the nearest thing they have, which may be the wrong thing entirely. */
 async function keepRelevant(candidates: Candidate[], preferences: Preferences): Promise<Candidate[] | null> {
   const review = await askJson(
-    `You are the Scout. For each numbered listing, decide whether it is really the product the shopper searched for, judged by what it is and how it is used. Keep close variants and other brands. Drop a different product that merely shares a word or a store aisle: tampons are not condoms, a gift card holder is not a gift card, and a poster or book about a product is not that product. If the search itself names something like a band or book, keep it. Do not drop a listing just because it does not state a color, since color was already checked. Shopper preferences: ${JSON.stringify(preferences)}. Return the numbers to keep, which may be none. ${UNTRUSTED}`,
+    `You are the Scout. For each numbered listing, decide whether it is really the product the shopper searched for, judged by what it is and how it is used. Keep close variants and other brands. Drop a different product that merely shares a word or a store aisle: tampons are not condoms, a gift card holder is not a gift card, and a poster, book, ornament, costume, scent, toy, pet treat or piece of clothing named after a product is not that product, so for "chocolate cookies" keep only cookies people eat. If the search itself names something like a band or book, keep it. Do not drop a listing just because it does not state a color, since color was already checked. Shopper preferences: ${JSON.stringify(preferences)}. Return the numbers to keep, which may be none. ${UNTRUSTED}`,
     `<untrusted>${JSON.stringify(
       candidates.map((c, n) => ({ n, searchedFor: c.query, title: c.title, category: c.category, description: c.description.slice(0, 160) })),
     )}</untrusted>`,
@@ -141,10 +181,12 @@ export async function scoutAgent(requested: RequestedItem[], budgetCents: number
       seen.add(key);
       return true;
     });
-  const relevant = found.length ? await keepRelevant(found, preferences) : null;
+  // The rules always run, so a busy AI can never let unrelated listings through.
+  const plausible = dropThemedLookalikes(found);
+  const relevant = plausible.length ? await keepRelevant(plausible, preferences) : [];
   return {
     found: found.length,
-    candidates: relevant ?? found,
+    candidates: relevant ?? plausible.filter(namesSearchedProduct),
     source: (results.some((r) => r.source === "live-api") ? "live-api" : "sample-data") as StepSource,
     note: results.find((r) => r.note)?.note,
   };
@@ -299,7 +341,7 @@ export function summaryByRules(mission: Mission): string {
     const stopped = new Set(mission.flags.filter((f) => f.severity === "critical").map((f) => f.candidateId)).size;
     return stopped
       ? "None of the listings found were safe to buy, so nothing was bought."
-      : "No safe listing matched this request, so nothing was bought.";
+      : `The catalog had no real match for ${mission.requested.map((i) => `"${i.query}"`).join(", ") || "this request"}, so nothing was bought rather than something unrelated. Try a different product or wording.`;
   }
   const items = mission.basket.map((l) => `${l.quantity} x ${l.title}`).join(", ") || "nothing";
   const failing = mission.checks.filter((c) => c.outcome !== "pass").map((c) => c.detail);

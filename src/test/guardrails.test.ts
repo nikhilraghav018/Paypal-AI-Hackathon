@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { cheapestBasket, intakeByRules, parseBudgetCents, preferencesByRules, riskRules } from "@/lib/agents";
+import { cheapestBasket, dropThemedLookalikes, intakeByRules, namesSearchedProduct, parseBudgetCents, preferencesByRules, riskRules } from "@/lib/agents";
 import { keepColorMatches, parseChannel3, preferenceFilters, queryWithColor } from "@/lib/catalog";
 import { isCrossSite } from "@/lib/same-site";
 import { firstBrokenEvent, issueMandate, mandateProblem } from "@/lib/integrity";
@@ -140,6 +140,33 @@ describe("parsing", () => {
   });
 });
 
+describe("scout relevance", () => {
+  const listing = (title: string, category: string, query = "chocolate cookies") =>
+    ({ ...line({ title, category, query }) }) as Candidate;
+
+  it("drops items that only borrow the product's name", () => {
+    const kept = dropThemedLookalikes([
+      listing("Chocolate Chip Cookies Wall Art", "Home & Garden > Decor > Artwork > Posters, Prints, & Visual Artwork"),
+      listing("Chocolate Chip Cookie Cologne", "Health & Beauty > Personal Care > Cosmetics > Perfume & Cologne"),
+      listing("Carob Chip Cookies Dog Treats", "Animals & Pet Supplies > Pet Supplies > Dog Supplies > Dog Treats"),
+      listing("Cookie Costume", "Apparel & Accessories > Costumes & Accessories > Costumes"),
+      listing("Double Chocolate Cookies, 12 Pack", "Food, Beverages & Tobacco > Food Items > Bakery > Cookies"),
+    ]);
+    expect(kept.map((c) => c.title)).toEqual(["Double Chocolate Cookies, 12 Pack"]);
+  });
+
+  it("keeps those items when they are what was asked for", () => {
+    expect(dropThemedLookalikes([listing("The Cookie Bible", "Media > Books > Print Books", "cookie cookbook")])).toHaveLength(1);
+    expect(dropThemedLookalikes([listing("Peanut Butter Dog Cookies", "Animals & Pet Supplies > Pet Supplies", "dog cookies")])).toHaveLength(1);
+  });
+
+  it("without AI, needs the listing to name the product searched for", () => {
+    expect(namesSearchedProduct(listing("Soft Baked Chocolate Cookie", "Food"))).toBe(true);
+    expect(namesSearchedProduct(listing("Chocolate Fondue Set", "Kitchen"))).toBe(false);
+    expect(namesSearchedProduct(listing("AA Battery 4 Pack", "Electronics", "aa batteries"))).toBe(true);
+  });
+});
+
 describe("full mission without any keys", () => {
   it("auto-clears a small order, quarantines the injected listing, and pays", async () => {
     const mission = await runMission("buy pens and copy paper under $30", BASE);
@@ -227,8 +254,10 @@ describe("PayPal sandbox failures", () => {
   let orderStatus: string;
   let captureFailures: number;
   let captureRequestIds: string[];
+  let savedAccountStatus: number;
 
   beforeEach(() => {
+    savedAccountStatus = 201;
     vi.stubEnv("PAYPAL_CLIENT_ID", "test-id");
     vi.stubEnv("PAYPAL_CLIENT_SECRET", "test-secret");
     orderCents = "16.98";
@@ -243,7 +272,7 @@ describe("PayPal sandbox failures", () => {
       calls.push(`${init.method} ${path}`);
       const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
       if (path === "/v1/oauth2/token") return json({ access_token: "t", expires_in: 3600 });
-      if (path === "/v2/checkout/orders" && String(init.body).includes("vault_id")) return json(captureBody, 201);
+      if (path === "/v2/checkout/orders" && String(init.body).includes("vault_id")) return json(captureBody, savedAccountStatus);
       if (path === "/v2/checkout/orders") return json({ id: ORDER, links: [{ rel: "payer-action", href: "https://sandbox.example/pay" }] }, 201);
       if (path.endsWith("/capture")) {
         captureRequestIds.push(String((init.headers as Record<string, string>)["PayPal-Request-Id"]));
@@ -362,6 +391,17 @@ describe("PayPal sandbox failures", () => {
       expect(mission.status).toBe("AWAITING_PAYER");
       expect(mission.approvalUrl).toBeTruthy();
       expect(committedThisMonth(getState().ledger, new Date())).toBe(mission.totalCents);
+      expect(mission.autopayFailed).toBe("failed");
+      expect(getState().wallet).toBeDefined();
+    });
+
+    it("turns autopay off when the owner removed Velora in PayPal", async () => {
+      savedAccountStatus = 403;
+      captureBody = { name: "NOT_AUTHORIZED", details: [{ issue: "PERMISSION_DENIED" }] };
+      const mission = await start();
+      expect(mission).toMatchObject({ status: "AWAITING_PAYER", autopayFailed: "revoked" });
+      expect(mission.approvalUrl).toBeTruthy();
+      expect(getState().wallet).toBeUndefined();
     });
 
     it("pays for a cart and empties it", async () => {

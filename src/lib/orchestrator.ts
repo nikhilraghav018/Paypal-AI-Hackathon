@@ -126,7 +126,7 @@ export async function runMission(
           ? ""
           : scout.candidates.length
             ? ` Kept ${scout.candidates.length} that are really what you asked for.`
-            : " None of them are really what you asked for."
+            : " None of them are really what you asked for, so none will be offered. The catalog may not carry this kind of product."
       }`,
     );
 
@@ -267,7 +267,12 @@ async function startCheckout(mission: Mission, returnBaseUrl: string, emit?: Emi
       return;
     } catch (error) {
       // Nothing was paid, so the owner can still approve this one on PayPal's page.
-      record(mission, "Treasurer", "rules", `Your saved account could not pay, so this needs approval on PayPal: ${error instanceof Error ? error.message : "unknown error"}`, emit);
+      const message = error instanceof Error ? error.message : "unknown error";
+      // PayPal answers 403 or 404 once the owner removes Velora under automatic payments, and retrying will not help.
+      const revoked = /^PayPal sandbox (403|404):/.test(message);
+      mission.autopayFailed = revoked ? "revoked" : "failed";
+      if (revoked) state.wallet = undefined;
+      record(mission, "Treasurer", "rules", `Your saved account could not pay, so this needs approval on PayPal${revoked ? ", and autopay is now off" : ""}: ${message}`, emit);
     }
   }
   if (paypalConfigured()) {
