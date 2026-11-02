@@ -15,7 +15,8 @@ export async function GET(request: NextRequest) {
     } else {
       await completePayment(missionId, searchParams.get("token"));
       // Only a confirmed capture earns the celebration.
-      if (getState().missions[missionId]?.status === "PAID") return Response.redirect(`${base}/paid?mission=${id}`, 303);
+      const paid = getState().missions[missionId];
+      if (paid?.status === "PAID" && !paid.capturePending) return Response.redirect(`${base}/paid?mission=${id}`, 303);
     }
   } catch (error) {
     notice = `&notice=${encodeURIComponent(error instanceof Error ? error.message : "Payment failed.")}`;

@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server";
 import { z } from "zod";
-import { runMission } from "@/lib/orchestrator";
+import { expireStaleOrders, runMission } from "@/lib/orchestrator";
 import { AGES, COLORS, CONDITIONS, GENDERS } from "@/lib/preferences";
 import { getState } from "@/lib/store";
 import type { StreamMessage } from "@/lib/types";
@@ -13,6 +13,7 @@ const Body = z.object({
   preferences: z
     .object({ gender: oneOf(GENDERS), age: oneOf(AGES), color: oneOf(COLORS), condition: oneOf(CONDITIONS) })
     .optional(),
+  safetyTest: z.boolean().optional(),
 });
 
 // Protects the free AI and catalog quotas if the demo is hosted publicly.
@@ -20,6 +21,7 @@ const MAX_MISSIONS_PER_HOUR = 40;
 const recentRuns: number[] = [];
 
 export async function GET() {
+  expireStaleOrders();
   const missions = Object.values(getState().missions).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return Response.json({ missions });
 }
@@ -52,6 +54,7 @@ export async function POST(request: NextRequest) {
           origin,
           (m, event) => send({ type: "event", missionId: m.id, event }),
           parsed.data.preferences,
+          parsed.data.safetyTest,
         );
         send({ type: "mission", mission });
       } catch (error) {

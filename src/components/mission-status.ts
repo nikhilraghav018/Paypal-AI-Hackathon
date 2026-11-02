@@ -18,5 +18,6 @@ export const STATUS: Record<Mission["status"], { label: string; tone: string; ou
   BLOCKED: { label: "Blocked", tone: "bg-danger-soft text-danger", outcome: "blocked" },
   REJECTED: { label: "Cancelled by you", tone: "bg-line text-ink", outcome: "cancelled" },
   CANCELLED: { label: "Cancelled by you", tone: "bg-line text-ink", outcome: "cancelled" },
+  EXPIRED: { label: "Expired before payment", tone: "bg-line text-ink", outcome: "cancelled" },
   FAILED: { label: "Stopped safely", tone: "bg-danger-soft text-danger", outcome: "blocked" },
 };

@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { cheapestBasket, intakeByRules, parseBudgetCents, preferencesByRules, riskRules } from "@/lib/agents";
 import { keepColorMatches, parseChannel3, preferenceFilters, queryWithColor } from "@/lib/catalog";
+import { isCrossSite } from "@/lib/same-site";
 import { firstBrokenEvent, issueMandate, mandateProblem } from "@/lib/integrity";
 import { addToCart, cartTotals, removeFromCart, reviewCart, setCartQuantity } from "@/lib/cart";
-import { applyWebhookEvent, approveMission, cancelCheckout, checkoutCart, chooseProduct, completePayment, refundMission, rejectMission, runMission } from "@/lib/orchestrator";
+import { applyWebhookEvent, approveMission, cancelCheckout, checkoutCart, chooseProduct, completePayment, expireStaleOrders, refundMission, rejectMission, runMission } from "@/lib/orchestrator";
 import { PAYPAL_BASE_URL, buildOrderBody, verifyWebhook } from "@/lib/paypal";
 import { DEFAULT_POLICY, committedThisMonth, evaluatePolicy, restrictedCategory } from "@/lib/policy";
 import { getState, resetState } from "@/lib/store";
@@ -223,11 +224,17 @@ describe("PayPal sandbox failures", () => {
   let captureStatus = 201;
   let captureBody: unknown;
   let calls: string[];
+  let orderStatus: string;
+  let captureFailures: number;
+  let captureRequestIds: string[];
 
   beforeEach(() => {
     vi.stubEnv("PAYPAL_CLIENT_ID", "test-id");
     vi.stubEnv("PAYPAL_CLIENT_SECRET", "test-secret");
     orderCents = "16.98";
+    orderStatus = "APPROVED";
+    captureFailures = 0;
+    captureRequestIds = [];
     captureStatus = 201;
     captureBody = { id: ORDER, purchase_units: [{ payments: { captures: [{ id: "CAP1", status: "COMPLETED" }] } }] };
     calls = [];
@@ -236,9 +243,15 @@ describe("PayPal sandbox failures", () => {
       calls.push(`${init.method} ${path}`);
       const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
       if (path === "/v1/oauth2/token") return json({ access_token: "t", expires_in: 3600 });
+      if (path === "/v2/checkout/orders" && String(init.body).includes("vault_id")) return json(captureBody, 201);
       if (path === "/v2/checkout/orders") return json({ id: ORDER, links: [{ rel: "payer-action", href: "https://sandbox.example/pay" }] }, 201);
-      if (path.endsWith("/capture")) return json(captureBody, captureStatus);
-      if (path === `/v2/checkout/orders/${ORDER}`) return json({ id: ORDER, status: "APPROVED", purchase_units: [{ amount: { value: orderCents, currency_code: "USD" } }] });
+      if (path.endsWith("/capture")) {
+        captureRequestIds.push(String((init.headers as Record<string, string>)["PayPal-Request-Id"]));
+        if (captureFailures-- > 0) return new Response(JSON.stringify({ name: "INTERNAL_SERVER_ERROR" }), { status: 500, headers: { "paypal-debug-id": "DBG1" } });
+        return json(captureBody, captureStatus);
+      }
+      if (path.endsWith("/refund")) return json({ id: "REF1", status: "COMPLETED" }, 201);
+      if (path === `/v2/checkout/orders/${ORDER}`) return json({ id: ORDER, status: orderStatus, purchase_units: [{ amount: { value: orderCents, currency_code: "USD" } }] });
       if (path === "/v1/notifications/verify-webhook-signature") return json({ verification_status: "FAILURE" });
       return json({}, 404);
     }));
@@ -252,23 +265,113 @@ describe("PayPal sandbox failures", () => {
     expect((await completePayment(mission.id, ORDER)).status).toBe("PAID");
   });
 
-  it("releases the budget when PayPal declines the capture", async () => {
+  it("does not capture an order PayPal has not approved", async () => {
+    const mission = await start();
+    orderCents = (mission.totalCents / 100).toFixed(2);
+    orderStatus = "PAYER_ACTION_REQUIRED";
+    const result = await completePayment(mission.id, ORDER);
+    expect(result.status).toBe("AWAITING_PAYER");
+    expect(calls.some((c) => c.endsWith("/capture"))).toBe(false);
+  });
+
+  it("retries a brief PayPal error with the same request ID, and keeps the debug ID", async () => {
+    const mission = await start();
+    orderCents = (mission.totalCents / 100).toFixed(2);
+    captureFailures = 1;
+    expect((await completePayment(mission.id, ORDER)).status).toBe("PAID");
+    expect(calls.filter((c) => c.endsWith("/capture"))).toHaveLength(2);
+    expect(new Set(captureRequestIds).size).toBe(1);
+  });
+
+  it("gives up after repeated errors and reports PayPal's debug ID", async () => {
+    const mission = await start();
+    orderCents = (mission.totalCents / 100).toFixed(2);
+    captureFailures = 5;
+    const result = await completePayment(mission.id, ORDER);
+    expect(result.status).toBe("FAILED");
+    expect(calls.filter((c) => c.endsWith("/capture"))).toHaveLength(3);
+    expect(result.events.at(-1)?.message).toContain("debug ID DBG1");
+  });
+
+  it("lets the payer try again when PayPal declines the payment method", async () => {
     const mission = await start();
     orderCents = (mission.totalCents / 100).toFixed(2);
     captureStatus = 422;
     captureBody = { name: "UNPROCESSABLE_ENTITY", details: [{ issue: "INSTRUMENT_DECLINED" }] };
     const result = await completePayment(mission.id, ORDER);
-    expect(result.status).toBe("FAILED");
-    expect(result.events.at(-1)?.message).toContain("INSTRUMENT_DECLINED");
+    expect(result.status).toBe("AWAITING_PAYER");
+    expect(result.approvalUrl).toBeTruthy();
+    expect(result.events.at(-1)?.message).toMatch(/declined/);
+
+    captureStatus = 201;
+    captureBody = { id: ORDER, purchase_units: [{ payments: { captures: [{ id: "CAP1", status: "COMPLETED" }] } }] };
+    expect((await completePayment(mission.id, ORDER)).status).toBe("PAID");
+  });
+
+  it("releases the budget when PayPal refuses a capture for another reason", async () => {
+    const mission = await start();
+    orderCents = (mission.totalCents / 100).toFixed(2);
+    captureStatus = 422;
+    captureBody = { name: "UNPROCESSABLE_ENTITY", details: [{ issue: "PAYEE_ACCOUNT_RESTRICTED" }] };
+    expect((await completePayment(mission.id, ORDER)).status).toBe("FAILED");
     expect(committedThisMonth(getState().ledger, new Date())).toBe(0);
   });
 
-  it("releases the budget when a capture does not complete", async () => {
+  it("keeps the budget held on a pending capture until PayPal settles it", async () => {
     const mission = await start();
     orderCents = (mission.totalCents / 100).toFixed(2);
     captureBody = { id: ORDER, purchase_units: [{ payments: { captures: [{ id: "CAP1", status: "PENDING" }] } }] };
-    expect((await completePayment(mission.id, ORDER)).status).toBe("FAILED");
-    expect(committedThisMonth(getState().ledger, new Date())).toBe(0);
+    const result = await completePayment(mission.id, ORDER);
+    expect(result).toMatchObject({ status: "PAID", capturePending: true });
+    expect(committedThisMonth(getState().ledger, new Date())).toBe(result.totalCents);
+    applyWebhookEvent({ id: "WH-settled", event_type: "PAYMENT.CAPTURE.COMPLETED", resource: { id: "CAP1" } });
+    expect(result.capturePending).toBe(false);
+  });
+
+  describe("autopay with a saved account", () => {
+    beforeEach(() => {
+      getState().wallet = { vaultId: "VAULT1", connectedAt: new Date().toISOString() };
+    });
+
+    it("pays in one call without an approval page, and only sends the saved account", async () => {
+      const mission = await start();
+      expect(mission).toMatchObject({ status: "PAID", captureId: "CAP1" });
+      expect(mission.approvalUrl).toBeUndefined();
+      expect(committedThisMonth(getState().ledger, new Date())).toBe(mission.totalCents);
+      expect(calls.filter((c) => c === "POST /v2/checkout/orders")).toHaveLength(1);
+      expect(calls.some((c) => c.endsWith("/capture"))).toBe(false);
+      expect(await refundMission(mission.id).then((m) => m.status)).toBe("REFUNDED");
+    });
+
+    it("never pays above the auto-approve limit without the owner", async () => {
+      const mission = await runMission("buy office chair", BASE);
+      expect(mission.status).toBe("NEEDS_HUMAN");
+      expect(calls.filter((c) => c === "POST /v2/checkout/orders")).toHaveLength(0);
+      expect((await approveMission(mission.id, BASE)).status).toBe("PAID");
+    });
+
+    it("never pays when policy blocks", async () => {
+      const mission = await runMission("buy pens under $1", BASE);
+      expect(mission.status).toBe("BLOCKED");
+      expect(calls.filter((c) => c === "POST /v2/checkout/orders")).toHaveLength(0);
+    });
+
+    it("falls back to PayPal's approval page when the saved account fails", async () => {
+      captureBody = { id: ORDER, status: "PAYER_ACTION_REQUIRED" };
+      const mission = await start();
+      expect(mission.status).toBe("AWAITING_PAYER");
+      expect(mission.approvalUrl).toBeTruthy();
+      expect(committedThisMonth(getState().ledger, new Date())).toBe(mission.totalCents);
+    });
+
+    it("pays for a cart and empties it", async () => {
+      getState().policy.autoApproveLimitCents = 100000;
+      const mission = await start();
+      addToCart(mission.id, "pen-1");
+      const order = await checkoutCart(cartTotals(getState().cart).totalCents, BASE);
+      expect(order.status).toBe("PAID");
+      expect(getState().cart).toHaveLength(0);
+    });
   });
 
   it("never captures if PayPal's order amount differs from the mandate", async () => {
@@ -389,6 +492,73 @@ describe("preferences", () => {
   it("lets the Customize menu override what the sentence says", async () => {
     const mission = await runMission("buy red pens under $20", BASE, undefined, { color: "blue", gender: "male" });
     expect(mission.preferences).toEqual({ color: "blue", gender: "male" });
+  });
+});
+
+describe("requests from other websites", () => {
+  const request = (method: string, path: string, headers: Record<string, string> = {}) =>
+    new Request(`http://localhost:3000${path}`, { method, headers: { host: "localhost:3000", ...headers } });
+
+  it("refuses a change sent from another site", () => {
+    expect(isCrossSite(request("POST", "/api/missions", { origin: "https://evil.example" }))).toBe(true);
+    expect(isCrossSite(request("POST", "/api/cart/checkout", { origin: "null" }))).toBe(true);
+    expect(isCrossSite(request("POST", "/api/wallet", { "sec-fetch-site": "cross-site" }))).toBe(true);
+  });
+
+  it("allows the app itself, reads and tools with no browser origin", () => {
+    expect(isCrossSite(request("POST", "/api/missions", { origin: "http://localhost:3000" }))).toBe(false);
+    expect(isCrossSite(request("GET", "/api/missions", { origin: "https://evil.example" }))).toBe(false);
+    expect(isCrossSite(request("POST", "/api/missions"))).toBe(false);
+  });
+
+  it("still accepts PayPal's webhooks, which verify their own signature", () => {
+    expect(isCrossSite(request("POST", "/api/paypal/webhook", { origin: "https://paypal.example" }))).toBe(false);
+  });
+});
+
+describe("saved account", () => {
+  it("sends only the vault ID, with no approval page", () => {
+    const body = buildOrderBody({ missionId: "m", basket: [line()], totalCents: 1000, returnUrl: BASE, cancelUrl: BASE, vaultId: "V1" });
+    expect(body.payment_source.paypal).toEqual({ vault_id: "V1" });
+  });
+
+  it("works in demo mode, labelled as simulated", async () => {
+    getState().wallet = { vaultId: "SIM-1", connectedAt: new Date().toISOString() };
+    const mission = await runMission("buy pens under $20", BASE);
+    expect(mission).toMatchObject({ status: "PAID", paymentMode: "simulated" });
+    expect(mission.events.at(-1)?.source).toBe("simulated");
+  });
+});
+
+describe("safety test", () => {
+  it("catches the planted listing even though it is cheapest", async () => {
+    const mission = await runMission("buy pens under $20", BASE, undefined, {}, true);
+    expect(mission.basket.some((l) => l.id === "planted-safety-test")).toBe(false);
+    expect(mission.alternatives?.some((c) => c.id === "planted-safety-test")).toBe(false);
+    expect(mission.flags.some((f) => f.candidateId === "planted-safety-test" && f.code === "PROMPT_INJECTION")).toBe(true);
+    expect(mission.events.some((e) => /Safety test passed/.test(e.message))).toBe(true);
+  });
+
+  it("plants nothing on a normal mission", async () => {
+    const mission = await runMission("buy pens under $20", BASE);
+    expect(mission.flags.some((f) => f.candidateId === "planted-safety-test")).toBe(false);
+  });
+});
+
+describe("expired orders", () => {
+  it("closes an unpaid order after its approval runs out and releases the budget", async () => {
+    const mission = await runMission("buy pens under $20", BASE);
+    expect(mission.status).toBe("AWAITING_PAYER");
+    expireStaleOrders(new Date(Date.now() + 16 * 60 * 1000));
+    expect(mission.status).toBe("EXPIRED");
+    expect(getState().ledger.find((e) => e.missionId === mission.id)?.status).toBe("released");
+    await expect(completePayment(mission.id, mission.orderId!)).rejects.toThrow(/not awaiting/);
+  });
+
+  it("leaves a fresh order alone", async () => {
+    const mission = await runMission("buy pens under $20", BASE);
+    expireStaleOrders();
+    expect(mission.status).toBe("AWAITING_PAYER");
   });
 });
 

@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_POLICY } from "./policy";
-import type { BasketLine, CartItem, LedgerEntry, Mission, Policy } from "./types";
+import type { BasketLine, CartItem, LedgerEntry, Mission, Policy, Wallet } from "./types";
 
 export interface AppState {
   policy: Policy;
@@ -9,6 +9,9 @@ export interface AppState {
   missions: Record<string, Mission>;
   seenWebhookIds: string[];
   cart: CartItem[];
+  wallet?: Wallet;
+  /** The setup token waiting for the owner's approval on PayPal. */
+  pendingSetupToken?: string;
   schemaVersion?: number;
 }
 

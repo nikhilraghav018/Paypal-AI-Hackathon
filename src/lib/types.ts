@@ -91,6 +91,7 @@ export type MissionStatus =
   | "BLOCKED"
   | "REJECTED"
   | "CANCELLED"
+  | "EXPIRED"
   | "FAILED";
 
 export interface AgentEvent {
@@ -103,6 +104,13 @@ export interface AgentEvent {
   hash: string;
 }
 
+/** A PayPal account the owner saved so agents can pay without the approval page. */
+export interface Wallet {
+  vaultId: string;
+  email?: string;
+  connectedAt: string;
+}
+
 export interface CartItem extends Candidate {
   /** The mission whose screening cleared this product. */
   sourceMissionId: string;
@@ -112,6 +120,12 @@ export interface Mission {
   id: string;
   /** Bought from the cart page rather than by a shopping mission. */
   fromCart?: boolean;
+  /** A test mission with a fake scam listing planted among the results. */
+  safetyTest?: boolean;
+  /** PayPal took the payment but has not finished settling it. */
+  capturePending?: boolean;
+  /** Times PayPal declined the funding source, so a retry counts as a new capture. */
+  declines?: number;
   /** Part of totalCents. Only cart orders carry tax. */
   taxCents?: number;
   prompt: string;

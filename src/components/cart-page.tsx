@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { CartItem, Mission, PolicyDecision } from "@/lib/types";
 import { Backdrop } from "./backdrop";
 import { CartLink } from "./cart-link";
@@ -97,6 +98,7 @@ function CartLine({
 }
 
 export function CartPage() {
+  const router = useRouter();
   const [cart, setCart] = useState<Cart | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
@@ -133,8 +135,10 @@ export function CartPage() {
         setBusy(false);
         return;
       }
-      const { status, approvalUrl, id } = data.mission;
-      window.location.assign(status === "AWAITING_PAYER" && approvalUrl ? approvalUrl : `/?mission=${encodeURIComponent(id)}`);
+      const { status, approvalUrl, id, capturePending } = data.mission;
+      const missionId = encodeURIComponent(id);
+      if (status === "AWAITING_PAYER" && approvalUrl) window.location.assign(approvalUrl);
+      else router.push(status === "PAID" && !capturePending ? `/paid?mission=${missionId}` : `/?mission=${missionId}`);
     } catch {
       setNotice("Checkout failed. Nothing was charged.");
       setBusy(false);

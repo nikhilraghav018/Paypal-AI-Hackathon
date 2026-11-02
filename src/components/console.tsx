@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { AgentEvent, AgentName, CartItem, Mission, Policy, StepSource, StreamMessage } from "@/lib/types";
 import { AGES, COLORS, CONDITIONS, GENDERS, preferenceLabels, type Preferences } from "@/lib/preferences";
 import { AgentCharacter, type CharacterState } from "./agent-character";
@@ -106,14 +107,62 @@ function SourceTag({ source }: { source: StepSource }) {
   );
 }
 
+interface WalletInfo {
+  connected: boolean;
+  email?: string;
+}
+
+function Autopay({ wallet, onChange }: { wallet: WalletInfo; onChange: (notice?: string) => void }) {
+  const [busy, setBusy] = useState(false);
+  const change = async (method: "POST" | "DELETE") => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/wallet", { method });
+      const data = (await res.json()) as { approvalUrl?: string; error?: string };
+      if (data.approvalUrl) {
+        window.location.assign(data.approvalUrl);
+        return;
+      }
+      onChange(data.error);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="mt-4 border-t border-line pt-4 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-medium">Agent autopay</span>
+        <span className={`text-xs font-semibold ${wallet.connected ? "text-accent" : "text-muted"}`}>{wallet.connected ? "On" : "Off"}</span>
+      </div>
+      <p className="mt-1 text-xs text-muted">
+        {wallet.connected
+          ? `Agents pay by themselves when every check passes${wallet.email ? `, using ${wallet.email}` : ""}. Bigger purchases still ask you first.`
+          : "Save a PayPal sandbox account once, and agents can pay by themselves when every check passes."}
+      </p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => change(wallet.connected ? "DELETE" : "POST")}
+        className={`btn mt-3 w-full px-3 py-2 text-xs ${wallet.connected ? "btn-quiet" : "btn-accent"}`}
+      >
+        {wallet.connected ? "Turn off autopay" : "Connect PayPal"}
+      </button>
+    </div>
+  );
+}
+
 function PolicyPanel({
   policy,
   committed,
   onSave,
+  wallet,
+  onWalletChange,
 }: {
   policy: Policy;
   committed: number;
   onSave: (update: Partial<Policy>) => void;
+  wallet: WalletInfo;
+  onWalletChange: (notice?: string) => void;
 }) {
   const field = (label: string, key: "autoApproveLimitCents" | "perPurchaseLimitCents" | "monthlyBudgetCents") => (
     <label className="flex items-center justify-between gap-3 text-sm">
@@ -150,6 +199,7 @@ function PolicyPanel({
         {field("Monthly budget", "monthlyBudgetCents")}
       </div>
       <p className="mt-4 text-xs text-muted">Always blocked: {policy.blockedCategories.join(", ")}.</p>
+      <Autopay wallet={wallet} onChange={onWalletChange} />
     </Panel>
   );
 }
@@ -545,14 +595,21 @@ function AuditTrail({ mission }: { mission: Mission }) {
 }
 
 async function loadSnapshot() {
-  const [policyRes, missionsRes, cartRes] = await Promise.all([fetch("/api/policy"), fetch("/api/missions"), fetch("/api/cart")]);
+  const [policyRes, missionsRes, cartRes, walletRes] = await Promise.all([
+    fetch("/api/policy"),
+    fetch("/api/missions"),
+    fetch("/api/cart"),
+    fetch("/api/wallet"),
+  ]);
   const { policy, committedCents } = (await policyRes.json()) as { policy: Policy; committedCents: number };
   const { missions } = (await missionsRes.json()) as { missions: Mission[] };
   const { items: cart } = (await cartRes.json()) as { items: CartItem[] };
-  return { policy, committedCents, missions, cart };
+  const wallet = (await walletRes.json()) as WalletInfo;
+  return { policy, committedCents, missions, cart, wallet };
 }
 
 export function Console() {
+  const router = useRouter();
   const [status, setStatus] = useState<Status | null>(null);
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [committed, setCommitted] = useState(0);
@@ -567,12 +624,15 @@ export function Console() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [wallet, setWallet] = useState<WalletInfo>({ connected: false });
+  const [safetyTest, setSafetyTest] = useState(false);
 
   const applySnapshot = useCallback((snapshot: Awaited<ReturnType<typeof loadSnapshot>>) => {
     setPolicy(snapshot.policy);
     setCommitted(snapshot.committedCents);
     setHistory(snapshot.missions);
     setCart(snapshot.cart);
+    setWallet(snapshot.wallet);
   }, []);
 
   const refresh = useCallback(async () => applySnapshot(await loadSnapshot()), [applySnapshot]);
@@ -598,6 +658,18 @@ export function Console() {
     setCommitted(data.committedCents);
   };
 
+  /** Autopay can finish a payment right here, without a trip to PayPal's page. */
+  const celebrate = (paid: Mission) => {
+    if (paid.status !== "PAID" || paid.capturePending) return false;
+    router.push(`/paid?mission=${encodeURIComponent(paid.id)}`);
+    return true;
+  };
+
+  const walletChanged = async (message?: string) => {
+    setNotice(message ?? "");
+    await refresh();
+  };
+
   const launch = async () => {
     setRunning(true);
     setLive(true);
@@ -605,7 +677,7 @@ export function Console() {
     setLiveEvents([]);
     setNotice("");
     try {
-      const res = await fetch("/api/missions", { method: "POST", body: JSON.stringify({ prompt, preferences }) });
+      const res = await fetch("/api/missions", { method: "POST", body: JSON.stringify({ prompt, preferences, safetyTest }) });
       if (!res.ok || !res.body) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error ?? "The mission could not start.");
@@ -626,7 +698,10 @@ export function Console() {
             await sleep(PACE_MS);
             setLiveEvents((events) => [...events, message.event]);
           }
-          if (message.type === "mission") setMission(message.mission);
+          if (message.type === "mission") {
+            setMission(message.mission);
+            if (celebrate(message.mission)) return;
+          }
           if (message.type === "error") setNotice(message.message);
         }
       }
@@ -647,6 +722,7 @@ export function Console() {
       const data = (await res.json()) as { mission?: Mission; error?: string };
       if (data.mission) setMission(data.mission);
       if (data.error) setNotice(data.error);
+      if (data.mission && action === "approve") celebrate(data.mission);
     } finally {
       setBusy(false);
       await refresh();
@@ -665,6 +741,7 @@ export function Console() {
       const data = (await res.json()) as { mission?: Mission; error?: string };
       if (data.mission) setMission(data.mission);
       if (data.error) setNotice(data.error);
+      if (data.mission) celebrate(data.mission);
     } finally {
       setBusy(false);
       await refresh();
@@ -691,10 +768,13 @@ export function Console() {
   const onLanding = !mission && !running;
   const tone: Outcome = mission ? STATUS[mission.status].outcome : "waiting";
   const canRun = prompt.trim().length >= 3;
-  const chosenCount = preferenceLabels(preferences).length;
+  const chosenCount = preferenceLabels(preferences).length + (safetyTest ? 1 : 0);
   const setPreference = (key: keyof Preferences) => (value: string | undefined) =>
     setPreferences((current) => ({ ...current, [key]: value }));
-  const requestLabels = preferenceLabels(mission ? mission.preferences : preferences);
+  const requestLabels = [
+    ...preferenceLabels(mission ? mission.preferences : preferences),
+    ...((mission ? mission.safetyTest : safetyTest) ? ["Safety test"] : []),
+  ];
   const simulatedParts = status && (status.catalog === "sample" || status.payments === "simulated" || !status.ai);
 
   const recentMissions = (
@@ -825,6 +905,15 @@ export function Console() {
                   <PreferenceSelect label="Age group" value={preferences.age} options={AGES} onChange={setPreference("age")} />
                   <PreferenceSelect label="Colour" value={preferences.color} options={COLORS} onChange={setPreference("color")} />
                   <PreferenceSelect label="Condition" value={preferences.condition} options={CONDITIONS} onChange={setPreference("condition")} />
+                  <label className="col-span-2 flex cursor-pointer items-start gap-2 text-sm sm:col-span-4">
+                    <input
+                      type="checkbox"
+                      checked={safetyTest}
+                      onChange={(e) => setSafetyTest(e.target.checked)}
+                      className="mt-1 h-4 w-4 shrink-0 cursor-pointer accent-[var(--accent)]"
+                    />
+                    <span className="text-muted">Safety test: plant a fake scam listing to see the agents catch it</span>
+                  </label>
                 </div>
               )}
             </div>
@@ -837,14 +926,14 @@ export function Console() {
           </div>
 
           <div className="mx-auto mt-8 grid max-w-5xl grid-cols-1 gap-6 pb-10 md:grid-cols-2">
-            {policy && <PolicyPanel policy={policy} committed={committed} onSave={savePolicy} />}
+            {policy && <PolicyPanel policy={policy} committed={committed} onSave={savePolicy} wallet={wallet} onWalletChange={walletChanged} />}
             {recentMissions}
           </div>
         </main>
       ) : (
         <main className="view-enter mt-6 grid grid-cols-1 gap-6 pb-10 lg:grid-cols-[19rem_minmax(0,1fr)_minmax(0,1.1fr)]">
           <div className="space-y-6">
-            {policy && <PolicyPanel policy={policy} committed={committed} onSave={savePolicy} />}
+            {policy && <PolicyPanel policy={policy} committed={committed} onSave={savePolicy} wallet={wallet} onWalletChange={walletChanged} />}
             {recentMissions}
           </div>
 
