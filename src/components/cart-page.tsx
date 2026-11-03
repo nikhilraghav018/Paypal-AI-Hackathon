@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { CartItem, Mission, PolicyDecision } from "@/lib/types";
 import { Backdrop } from "./backdrop";
-import { CartLink } from "./cart-link";
+import { SiteNav } from "./site-nav";
 
 interface Cart {
   items: CartItem[];
@@ -156,7 +156,7 @@ export function CartPage() {
         <h1 className="brand">
           <Link href="/">Velora</Link>
         </h1>
-        <CartLink count={units} />
+        <SiteNav cartCount={units} />
       </header>
 
       <main className="view-enter mx-auto max-w-6xl pb-10">

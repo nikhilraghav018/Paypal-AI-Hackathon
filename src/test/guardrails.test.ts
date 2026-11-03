@@ -835,3 +835,33 @@ describe("MCP server for outside agents", () => {
     expect(data).toMatchObject({ autopay: "off", monthlyBudget: "$500.00" });
   });
 });
+
+describe("dashboard", () => {
+  it("counts outcomes, who asked, price ranges and guardrail catches", async () => {
+    const { buildDashboard } = await import("@/lib/dashboard-data");
+    const { dashboardStats } = await import("@/lib/dashboard");
+    getState().policy.autoApproveLimitCents = 100000;
+    await runMission("buy pens and copy paper under $30", BASE);
+    await runMission("buy a red wine sampler", BASE, undefined, {}, false, "Claude");
+    const data = buildDashboard(getState());
+    const stats = dashboardStats(data.missions);
+    expect(stats.tiles.missions).toBe(2);
+    expect(stats.outcomes.find((o) => o.name === "Stopped")?.value).toBe(1);
+    expect(stats.outcomes.find((o) => o.name === "Waiting")?.value).toBe(1);
+    expect(stats.daily.agents.at(-1)).toBe(1);
+    expect(stats.daily.you.at(-1)).toBe(1);
+    expect(stats.guardrails.map(([label]) => label)).toEqual(expect.arrayContaining(["Hidden instructions", "Restricted goods"]));
+    expect(stats.priceRanges.notBought.reduce((a, b) => a + b, 0)).toBe(2);
+  });
+
+  it("suggests only screened listings that are not already bought or in the cart", async () => {
+    const { buildDashboard } = await import("@/lib/dashboard-data");
+    const mission = await runMission("buy pens", BASE);
+    addToCart(mission.id, mission.basket[0].id);
+    const { trending } = buildDashboard(getState());
+    const ids = [...(trending.category?.products ?? []), ...(trending.priceRange?.products ?? [])].map((p) => p.candidateId);
+    expect(ids).not.toContain(mission.basket[0].id);
+    expect(ids).not.toContain("pen-4");
+    expect(ids.length).toBeGreaterThan(0);
+  });
+});

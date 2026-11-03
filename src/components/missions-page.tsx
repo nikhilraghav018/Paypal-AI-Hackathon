@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import type { CartItem, Mission } from "@/lib/types";
 import { Backdrop } from "./backdrop";
-import { CartLink } from "./cart-link";
+import { SiteNav } from "./site-nav";
 import { OUTCOME_STYLE, STATUS } from "./mission-status";
 
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -95,7 +95,7 @@ export function MissionsPage() {
         <h1 className="brand">
           <Link href="/">Velora</Link>
         </h1>
-        <CartLink count={units} />
+        <SiteNav cartCount={units} />
       </header>
 
       <main className="view-enter mx-auto max-w-4xl pb-10">

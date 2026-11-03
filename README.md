@@ -17,6 +17,7 @@ People and small teams who want an AI agent to handle routine shopping, but won'
 - **Explore and choose.** Compare every screened option for an item, and switch to another. Limits are checked again and a new order is created.
 - **Agent autopay.** Save a PayPal sandbox account once, and agents can pay by themselves when every check passes. Bigger purchases still wait for you, and autopay can be turned off at any time.
 - **Cart.** Add products from several missions, change quantities, and pay for everything in one PayPal order with estimated tax.
+- **Dashboard.** Charts of spending over time, outcomes, price ranges, categories, guardrail catches and purchases made by AI agents, plus trending products picked from screened listings. It updates by itself as missions finish.
 - **Refunds and history.** Refund a purchase to restore the budget, and see every mission on the All missions page.
 - **A safe wallet for any AI agent.** Claude, ChatGPT or any other MCP client can ask Velora to buy something. Their requests go through the same agents, limits, signed mandates and PayPal flow, and show up in your missions with the agent's name.
 - **Safety test.** Plant a fake scam listing from the Customize menu and watch the Risk Sentinel catch it. It is the cheapest option, so it would win if it got through.

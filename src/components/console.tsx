@@ -8,7 +8,7 @@ import { AGES, COLORS, CONDITIONS, GENDERS, preferenceLabels, type Preferences }
 import { AgentCharacter, type CharacterState } from "./agent-character";
 import { Backdrop, type Outcome } from "./backdrop";
 import { OUTCOME_STYLE, STATUS } from "./mission-status";
-import { CartLink } from "./cart-link";
+import { SiteNav } from "./site-nav";
 
 const AGENTS: { name: AgentName; job: string }[] = [
   { name: "Intake", job: "Turns your request into a clear shopping mission" },
@@ -87,14 +87,6 @@ function Panel({ title, children, className = "" }: { title: string; children: R
       <h2 className="section-title mb-4 text-lg font-semibold tracking-tight">{title}</h2>
       {children}
     </section>
-  );
-}
-
-function Chip({ on, children }: { on: boolean; children: React.ReactNode }) {
-  return (
-    <span className={`neu-inset rounded-full px-3 py-1 text-xs ${on ? "text-accent" : "text-muted"}`}>
-      {children}
-    </span>
   );
 }
 
@@ -869,16 +861,7 @@ export function Console() {
         <h1 className="brand">
           <button onClick={goHome} disabled={running}>Velora</button>
         </h1>
-        <div className="flex flex-wrap items-center gap-2">
-          {status && (
-            <div className="hidden flex-wrap items-center gap-2 sm:flex">
-              <Chip on={Boolean(status.ai)}>AI: {status.ai ?? "rules only"}</Chip>
-              <Chip on={status.catalog === "channel3"}>Catalog: {status.catalog === "channel3" ? "Channel3" : "sample"}</Chip>
-              <Chip on={status.payments === "sandbox"}>Payments: {status.payments === "sandbox" ? "PayPal sandbox" : "simulated"}</Chip>
-            </div>
-          )}
-          <CartLink count={cart.reduce((sum, item) => sum + item.quantity, 0)} />
-        </div>
+        <SiteNav cartCount={cart.reduce((sum, item) => sum + item.quantity, 0)} />
       </header>
 
       {simulatedParts && (
