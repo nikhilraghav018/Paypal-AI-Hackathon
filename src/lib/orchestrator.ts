@@ -81,6 +81,7 @@ export async function runMission(
   emit?: Emit,
   chosenPreferences: Preferences = {},
   safetyTest = false,
+  requestedBy?: string,
 ): Promise<Mission> {
   const state = getState();
   const mission: Mission = {
@@ -96,6 +97,7 @@ export async function runMission(
     checks: [],
     events: [],
     ...(safetyTest ? { safetyTest } : {}),
+    ...(requestedBy ? { requestedBy } : {}),
   };
   state.missions[mission.id] = mission;
   const log = (agent: AgentName, source: StepSource, message: string) => record(mission, agent, source, message, emit);
@@ -109,7 +111,7 @@ export async function runMission(
     log(
       "Intake",
       intake.source,
-      `Understood ${intake.requested.map((i) => `${i.quantity} x ${i.query}`).join(", ")}; budget ${
+      `${requestedBy ? `Request from ${requestedBy} through MCP. ` : ""}Understood ${intake.requested.map((i) => `${i.quantity} x ${i.query}`).join(", ")}; budget ${
         intake.budgetCents === null ? "not stated" : usd(intake.budgetCents)
       }.${preferenceText ? ` Preferences: ${preferenceText}.` : ""}`,
     );

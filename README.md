@@ -18,6 +18,7 @@ People and small teams who want an AI agent to handle routine shopping, but won'
 - **Agent autopay.** Save a PayPal sandbox account once, and agents can pay by themselves when every check passes. Bigger purchases still wait for you, and autopay can be turned off at any time.
 - **Cart.** Add products from several missions, change quantities, and pay for everything in one PayPal order with estimated tax.
 - **Refunds and history.** Refund a purchase to restore the budget, and see every mission on the All missions page.
+- **A safe wallet for any AI agent.** Claude, ChatGPT or any other MCP client can ask Velora to buy something. Their requests go through the same agents, limits, signed mandates and PayPal flow, and show up in your missions with the agent's name.
 - **Safety test.** Plant a fake scam listing from the Customize menu and watch the Risk Sentinel catch it. It is the cheapest option, so it would win if it got through.
 
 ## The agent team
@@ -32,6 +33,26 @@ People and small teams who want an AI agent to handle routine shopping, but won'
 | Auditor | Explains the decision in plain language | Gemini, with rules as backup |
 | Treasurer | The only agent that can touch PayPal, and only with a signed mandate | PayPal Orders, Payments and Vault APIs |
 
+## Use Velora from any AI agent (MCP)
+
+Velora is also an [MCP](https://modelcontextprotocol.io) server at `/api/mcp`, so other AI agents can shop through it instead of holding a payment method themselves. Payment tools for agents usually let them pay directly. Velora sits in front of the payment instead: an outside agent can ask, but every request goes through your rules, and only you can approve more.
+
+| Tool | What it does |
+| --- | --- |
+| `get_spending_rules` | Shows your limits, budget left this month, blocked categories and whether autopay is on. |
+| `request_purchase` | Runs the full agent team on a request such as "a black ink pen under $5" and returns what was chosen, the decision and the next step. |
+| `check_purchase` | Shows the status of an earlier request, for example after you approved it. |
+
+There is deliberately no tool to approve, refund or change limits. A request over the agent limit waits for you in Velora, and a blocked one stays blocked however it is worded.
+
+To switch it on, set `VELORA_MCP_TOKEN` in `.env.local` to a long random secret (`openssl rand -hex 32`) and restart. Clients send it as a bearer token. For example, with Claude Code:
+
+```bash
+claude mcp add --transport http velora http://localhost:3000/api/mcp --header "Authorization: Bearer YOUR_TOKEN"
+```
+
+Then ask Claude something like "Use Velora to buy me a yoga mat under $40." Without the token set, the endpoint stays off.
+
 ## Safety design
 
 - **The AI cannot authorize spending.** The Policy Guardian is ordinary code. Model output only reaches it as a basket whose prices come from the catalog record.
@@ -40,6 +61,7 @@ People and small teams who want an AI agent to handle routine shopping, but won'
 - **Budget reservations.** Pending checkouts count against the monthly budget, and refunds restore it.
 - **Tamper-evident audit trail.** Each entry includes the hash of the one before it, so an edit breaks the chain.
 - **Verified webhooks.** PayPal confirms each event's signature before a refund, reversal or denial made outside the app can change the budget.
+- **Outside agents get no extra power.** MCP requests need a secret token, share the app's rate limit, and can only ask and check. Their name is recorded in the audit trail.
 - **Sandbox only.** The PayPal host is fixed in code, so the app cannot reach the live API.
 
 ## How PayPal is used
@@ -90,6 +112,7 @@ We ran the full PayPal Doctor checklist from [PayPal's AI Toolkit](https://githu
 | Google Gemini (free tier) | Understands requests, judges whether a listing is really what was asked for, reviews listings for deception, picks the best basket and explains decisions. If one model is busy another is tried, and if both are busy each agent falls back to rules. |
 | Channel3 | Live product search with price, condition, gender and age filters. |
 | Next.js, React, TypeScript, Tailwind CSS | The app and its server. |
+| Model Context Protocol SDK | Lets outside AI agents use Velora as a tool. |
 | Vitest | Automated tests, including simulated PayPal failures. |
 
 ## Run it

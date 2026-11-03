@@ -120,6 +120,8 @@ export interface Mission {
   id: string;
   /** Bought from the cart page rather than by a shopping mission. */
   fromCart?: boolean;
+  /** The outside AI agent that asked for this purchase through Velora's MCP server. */
+  requestedBy?: string;
   /** A test mission with a fake scam listing planted among the results. */
   safetyTest?: boolean;
   /** PayPal took the payment but has not finished settling it. */

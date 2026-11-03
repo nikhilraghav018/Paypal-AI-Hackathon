@@ -133,6 +133,8 @@ const THEMED_AISLES: [aisle: RegExp, wanted: RegExp][] = [
   [/t-shirts|shirts & tops/i, /\b(shirt|tee|top)/i],
   [/charms|jewelry/i, /\b(charm|jibbitz|necklace|bracelet|pendant|jewel)/i],
   [/artificial|vase fillers/i, /\b(artificial|fake|faux|decor|vase)/i],
+  [/decorative/i, /\b(decor|vase|vintage|antique|collectible|empty)/i],
+  [/barware|drinkware|decanter/i, /\b(glass|decanter|barware|tumbler|mug|cup|drinkware|flask|shaker|carafe)/i],
   [/recipe card/i, /\b(recipe|card)/i],
   [/arts & crafts|fabric/i, /\b(craft|fabric|sewing|quilt|diy|sticker)/i],
   [/paper products|stationery/i, /\b(paper|letterhead|stationery|notebook|journal|notepad|planner|envelope)/i],

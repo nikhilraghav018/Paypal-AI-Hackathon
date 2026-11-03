@@ -819,6 +819,7 @@ export function Console() {
   const requestLabels = [
     ...preferenceLabels(mission ? mission.preferences : preferences),
     ...((mission ? mission.safetyTest : safetyTest) ? ["Safety test"] : []),
+    ...(mission?.requestedBy ? [`Asked by ${mission.requestedBy} via MCP`] : []),
   ];
   const simulatedParts = status && (status.catalog === "sample" || status.payments === "simulated" || !status.ai);
 
@@ -846,6 +847,7 @@ export function Console() {
                 <span className="flex items-center gap-1.5 text-xs text-muted">
                   <span className="status-dot" style={{ background: style.dot, width: 8, height: 8 }} aria-hidden />
                   {info.label}
+                  {m.requestedBy && <span className="truncate">· by {m.requestedBy}</span>}
                 </span>
               </button>
             </li>

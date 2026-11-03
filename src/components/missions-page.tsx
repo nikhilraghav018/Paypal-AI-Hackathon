@@ -17,7 +17,10 @@ function MissionCard({ mission }: { mission: Mission }) {
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
           <h3 className="display text-lg leading-snug font-semibold break-words">{mission.prompt}</h3>
-          <p className="mt-1 text-xs text-muted">{new Date(mission.createdAt).toLocaleString()}</p>
+          <p className="mt-1 text-xs text-muted">
+            {new Date(mission.createdAt).toLocaleString()}
+            {mission.requestedBy && ` · Asked by ${mission.requestedBy} via MCP`}
+          </p>
         </div>
         <span className={`rounded-xl px-3 py-1 text-sm font-semibold whitespace-nowrap ${info.tone}`}>{info.label}</span>
       </div>
