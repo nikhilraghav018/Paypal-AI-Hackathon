@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { createPaymentToken } from "@/lib/paypal";
 import { getState, saveState } from "@/lib/store";
+import { forVisitor } from "@/lib/visitor";
 
-export async function GET(request: NextRequest) {
+async function handleGET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl;
   const base = process.env.APP_URL?.replace(/\/$/, "") || origin;
   const state = getState();
@@ -23,3 +24,5 @@ export async function GET(request: NextRequest) {
   saveState();
   return Response.redirect(`${base}/${notice ? `?notice=${encodeURIComponent(notice)}` : ""}`, 303);
 }
+
+export const GET = forVisitor(handleGET);

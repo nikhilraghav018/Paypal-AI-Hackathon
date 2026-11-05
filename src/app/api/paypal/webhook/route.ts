@@ -1,5 +1,6 @@
-import { applyWebhookEvent } from "@/lib/orchestrator";
+import { applyWebhookEvent, webhookMission } from "@/lib/orchestrator";
 import { verifyWebhook, type PayPalWebhookEvent } from "@/lib/paypal";
+import { findVisitor, runAsVisitor } from "@/lib/store";
 
 export async function POST(request: Request) {
   const rawBody = await request.text();
@@ -11,6 +12,9 @@ export async function POST(request: Request) {
     return Response.json({ error: "Could not verify the event." }, { status: 503 });
   }
   if (!verified) return Response.json({ error: "Event not verified." }, { status: 400 });
-  applyWebhookEvent(JSON.parse(rawBody) as PayPalWebhookEvent);
+  const event = JSON.parse(rawBody) as PayPalWebhookEvent;
+  // PayPal sends no browser cookie, so the event goes to whichever visitor owns the payment.
+  const owner = findVisitor((state) => Boolean(webhookMission(state, event)));
+  if (owner) runAsVisitor(owner, () => applyWebhookEvent(event));
   return Response.json({ received: true });
 }

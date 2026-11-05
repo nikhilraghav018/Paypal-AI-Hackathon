@@ -1,7 +1,8 @@
 import type { NextRequest } from "next/server";
 import { MissionError, checkoutCart } from "@/lib/orchestrator";
+import { forVisitor } from "@/lib/visitor";
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   const origin = process.env.APP_URL?.replace(/\/$/, "") || request.nextUrl.origin;
   const body = (await request.json().catch(() => null)) as { totalCents?: unknown } | null;
   try {
@@ -11,3 +12,5 @@ export async function POST(request: NextRequest) {
     return Response.json({ error: error instanceof Error ? error.message : "Checkout failed." }, { status: known ? 409 : 502 });
   }
 }
+
+export const POST = forVisitor(handlePOST);

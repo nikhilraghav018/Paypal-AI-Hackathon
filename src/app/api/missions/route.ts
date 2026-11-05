@@ -5,6 +5,7 @@ import { AGES, COLORS, CONDITIONS, GENDERS } from "@/lib/preferences";
 import { allowMissionRun } from "@/lib/rate-limit";
 import { getState } from "@/lib/store";
 import type { StreamMessage } from "@/lib/types";
+import { forVisitor } from "@/lib/visitor";
 
 const oneOf = <T extends { value: string }>(options: readonly T[]) =>
   z.enum(options.map((option) => option.value) as [T["value"], ...T["value"][]]).optional();
@@ -17,13 +18,13 @@ const Body = z.object({
   safetyTest: z.boolean().optional(),
 });
 
-export async function GET() {
+async function handleGET() {
   expireStaleOrders();
   const missions = Object.values(getState().missions).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return Response.json({ missions });
 }
 
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   const parsed = Body.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Describe what to buy in 3 to 500 characters." }, { status: 400 });
 
@@ -59,3 +60,6 @@ export async function POST(request: NextRequest) {
   });
   return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" } });
 }
+
+export const GET = forVisitor(handleGET);
+export const POST = forVisitor(handlePOST);

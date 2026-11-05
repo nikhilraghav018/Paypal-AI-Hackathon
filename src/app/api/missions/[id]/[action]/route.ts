@@ -2,8 +2,9 @@ import type { NextRequest } from "next/server";
 import { firstBrokenEvent } from "@/lib/integrity";
 import { MissionError, approveMission, cancelCheckout, chooseProduct, refundMission, rejectMission } from "@/lib/orchestrator";
 import { getState } from "@/lib/store";
+import { forVisitor } from "@/lib/visitor";
 
-export async function POST(request: NextRequest, { params }: RouteContext<"/api/missions/[id]/[action]">) {
+async function handlePOST(request: NextRequest, { params }: RouteContext<"/api/missions/[id]/[action]">) {
   const { id, action } = await params;
   const origin = process.env.APP_URL?.replace(/\/$/, "") || request.nextUrl.origin;
   try {
@@ -32,3 +33,5 @@ export async function POST(request: NextRequest, { params }: RouteContext<"/api/
     );
   }
 }
+
+export const POST = forVisitor(handlePOST);

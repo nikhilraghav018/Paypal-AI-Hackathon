@@ -10,6 +10,57 @@ interface Status {
   payments: "sandbox" | "simulated";
 }
 
+interface AgentAccess {
+  enabled: boolean;
+  url?: string;
+  key?: string;
+}
+
+/** Lets this visitor connect Claude or another MCP client with their own key, which can only ask and check. */
+function ConnectAgent() {
+  const [access, setAccess] = useState<AgentAccess | null>(null);
+  const [copied, setCopied] = useState("");
+
+  useEffect(() => {
+    fetch("/api/agent-key")
+      .then((res) => res.json())
+      .then(setAccess)
+      .catch(() => setAccess({ enabled: false }));
+  }, []);
+
+  if (!access?.enabled || !access.url || !access.key) return null;
+  const command = `claude mcp add --transport http velora ${access.url} --header "Authorization: Bearer ${access.key}"`;
+  const copy = (label: string, text: string) =>
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(label);
+      setTimeout(() => setCopied(""), 1500);
+    }, () => {});
+  const rotate = () => {
+    if (!confirm("Make a new key? Agents using the old one will stop working.")) return;
+    fetch("/api/agent-key", { method: "POST" })
+      .then((res) => res.json())
+      .then(setAccess)
+      .catch(() => {});
+  };
+
+  return (
+    <div className="mt-3 border-t border-line pt-3">
+      <p className="text-sm font-medium">Connect an AI agent</p>
+      <p className="mt-1 text-xs text-muted">Claude or any MCP client can shop here with your key. It can ask and check, but only you approve.</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button type="button" className="btn btn-quiet text-xs" onClick={() => copy("command", command)}>
+          {copied === "command" ? "Copied" : "Copy Claude Code command"}
+        </button>
+        <button type="button" className="btn btn-quiet text-xs" onClick={() => copy("key", access.key!)}>
+          {copied === "key" ? "Copied" : "Copy key"}
+        </button>
+        <button type="button" className="btn btn-quiet text-xs" onClick={rotate}>New key</button>
+      </div>
+      <p className="mt-2 truncate text-[11px] text-muted" title={access.url}>{access.url}</p>
+    </div>
+  );
+}
+
 /** Shows which services are live and which are simulated, behind one button so the header stays calm. */
 function LiveServices() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -52,7 +103,7 @@ function LiveServices() {
         Live services
       </button>
       {open && (
-        <div role="dialog" aria-label="Live services" className="neu absolute right-0 z-30 mt-2 w-72 rounded-2xl p-4" style={{ background: "var(--panel)" }}>
+        <div role="dialog" aria-label="Live services" className="neu absolute right-0 z-30 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-2xl p-4" style={{ background: "var(--panel)" }}>
           {!status ? (
             <p className="text-sm text-muted">Checking...</p>
           ) : (
@@ -71,6 +122,7 @@ function LiveServices() {
             </ul>
           )}
           <p className="mt-3 border-t border-line pt-3 text-xs text-muted">PayPal runs in sandbox only, so no real money moves.</p>
+          <ConnectAgent />
         </div>
       )}
     </div>

@@ -2,19 +2,20 @@ import { randomUUID } from "node:crypto";
 import { type NextRequest, connection } from "next/server";
 import { createSetupToken, deletePaymentToken, paypalConfigured } from "@/lib/paypal";
 import { getState, saveState } from "@/lib/store";
+import { forVisitor } from "@/lib/visitor";
 
 function snapshot() {
   const { wallet } = getState();
   return { connected: Boolean(wallet), email: wallet?.email };
 }
 
-export async function GET() {
+async function handleGET() {
   await connection();
   return Response.json(snapshot());
 }
 
 /** Starts saving a PayPal account. Demo mode has no PayPal keys, so it saves a labelled simulated one. */
-export async function POST(request: NextRequest) {
+async function handlePOST(request: NextRequest) {
   const origin = process.env.APP_URL?.replace(/\/$/, "") || request.nextUrl.origin;
   const state = getState();
   try {
@@ -33,7 +34,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function DELETE() {
+async function handleDELETE() {
   const state = getState();
   try {
     if (state.wallet && paypalConfigured()) await deletePaymentToken(state.wallet.vaultId);
@@ -44,3 +45,7 @@ export async function DELETE() {
   saveState();
   return Response.json(snapshot());
 }
+
+export const GET = forVisitor(handleGET);
+export const POST = forVisitor(handlePOST);
+export const DELETE = forVisitor(handleDELETE);

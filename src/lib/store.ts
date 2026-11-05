@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DEFAULT_POLICY } from "./policy";
 import type { BasketLine, CartItem, LedgerEntry, Mission, Policy, Wallet } from "./types";
@@ -12,11 +13,42 @@ export interface AppState {
   wallet?: Wallet;
   /** The setup token waiting for the owner's approval on PayPal. */
   pendingSetupToken?: string;
+  /** This visitor's personal key for outside AI agents. It can ask and check, never approve. */
+  agentKey?: string;
   schemaVersion?: number;
 }
 
-const DATA_FILE = path.join(process.cwd(), ".data", "state.json");
-const holder = globalThis as unknown as { __agentAllowance?: AppState };
+/**
+ * Every visitor gets their own private state, found by a random ID in a browser cookie. A new
+ * browser starts with an empty app, and a returning one sees only its own missions, cart and
+ * dashboard. Code that runs without a visitor (tests, scripts) shares one "local" state.
+ */
+const DATA_DIR = path.join(process.cwd(), ".data");
+const VISITOR_DIR = path.join(DATA_DIR, "visitors");
+/** The single shared file from before visitors existed. The first browser to visit inherits it. */
+const LEGACY_FILE = path.join(DATA_DIR, "state.json");
+const LOCAL_VISITOR = "local";
+/** Keeps memory bounded on a public host. Evicted visitors reload from disk on their next visit. */
+const MAX_CACHED_VISITORS = 500;
+
+const VISITOR_ID = /^[a-f0-9]{32}$/;
+export const isVisitorId = (value: unknown): value is string => typeof value === "string" && VISITOR_ID.test(value);
+
+const holder = globalThis as unknown as {
+  __veloraStates?: Map<string, AppState>;
+  __veloraVisitor?: AsyncLocalStorage<string>;
+};
+const states = (holder.__veloraStates ??= new Map());
+const visitor = (holder.__veloraVisitor ??= new AsyncLocalStorage<string>());
+
+/** Runs work, including anything it starts in the background, as one visitor. */
+export function runAsVisitor<T>(id: string, work: () => T): T {
+  return visitor.run(id, work);
+}
+
+export function currentVisitor(): string {
+  return visitor.getStore() ?? LOCAL_VISITOR;
+}
 
 const SCHEMA_VERSION = 5;
 
@@ -47,32 +79,80 @@ function freshState(): AppState {
   return { policy: { ...DEFAULT_POLICY }, ledger: [], missions: {}, seenWebhookIds: [], cart: [], schemaVersion: SCHEMA_VERSION };
 }
 
-export function getState(): AppState {
-  if (holder.__agentAllowance) {
-    migrate(holder.__agentAllowance);
-    return holder.__agentAllowance;
-  }
+const fileFor = (id: string) => path.join(VISITOR_DIR, `${id}.json`);
+const persists = () => process.env.NODE_ENV !== "test";
+
+/** Hands the old shared file to the first real visitor, so upgrading keeps the owner's history. */
+function claimLegacyFile(id: string): void {
+  if (!isVisitorId(id) || !existsSync(LEGACY_FILE) || existsSync(fileFor(id))) return;
+  try {
+    mkdirSync(VISITOR_DIR, { recursive: true });
+    renameSync(LEGACY_FILE, fileFor(id));
+  } catch {}
+}
+
+function load(id: string): AppState {
   let state = freshState();
-  if (process.env.NODE_ENV !== "test") {
+  if (persists()) {
+    claimLegacyFile(id);
     try {
-      state = { ...state, ...(JSON.parse(readFileSync(DATA_FILE, "utf8")) as AppState) };
+      state = { ...state, ...(JSON.parse(readFileSync(fileFor(id), "utf8")) as AppState) };
     } catch {}
   }
   migrate(state);
-  holder.__agentAllowance = state;
   return state;
 }
 
+function cache(id: string, state: AppState): void {
+  states.delete(id);
+  states.set(id, state);
+  if (states.size > MAX_CACHED_VISITORS) states.delete(states.keys().next().value!);
+}
+
+function stateOf(id: string): AppState {
+  const cached = states.get(id);
+  if (cached) {
+    migrate(cached);
+    cache(id, cached);
+    return cached;
+  }
+  const state = load(id);
+  cache(id, state);
+  return state;
+}
+
+export function getState(): AppState {
+  return stateOf(currentVisitor());
+}
+
 export function saveState(): void {
-  if (process.env.NODE_ENV === "test") return;
+  if (!persists()) return;
+  const id = currentVisitor();
   try {
-    mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-    writeFileSync(DATA_FILE, JSON.stringify(getState()));
+    mkdirSync(VISITOR_DIR, { recursive: true });
+    writeFileSync(fileFor(id), JSON.stringify(stateOf(id)));
   } catch {
     // Read-only hosts keep state in memory.
   }
 }
 
 export function resetState(): void {
-  holder.__agentAllowance = freshState();
+  states.set(currentVisitor(), freshState());
+}
+
+/**
+ * Finds the visitor whose state matches, for events with no browser behind them, such as PayPal
+ * webhooks. Only saved visitors can match, since a payment always saves its mission first.
+ */
+export function findVisitor(matches: (state: AppState) => boolean): string | null {
+  const ids = new Set(states.keys());
+  if (persists()) {
+    try {
+      for (const file of readdirSync(VISITOR_DIR)) if (file.endsWith(".json")) ids.add(file.slice(0, -5));
+    } catch {}
+  }
+  for (const id of ids) {
+    if ((id === LOCAL_VISITOR || isVisitorId(id)) && matches(stateOf(id))) return id;
+  }
+  return null;
 }

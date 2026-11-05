@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { committedThisMonth } from "@/lib/policy";
 import { getState, saveState } from "@/lib/store";
+import { forVisitor } from "@/lib/visitor";
 
 const cents = z.number().int().min(0).max(100_000_00);
 
@@ -20,11 +21,11 @@ function snapshot() {
   return { policy, committedCents: committedThisMonth(ledger, new Date()) };
 }
 
-export async function GET() {
+async function handleGET() {
   return Response.json(snapshot());
 }
 
-export async function PUT(request: Request) {
+async function handlePUT(request: Request) {
   const parsed = PolicyUpdate.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return Response.json({ error: "Invalid policy." }, { status: 400 });
   const state = getState();
@@ -32,3 +33,6 @@ export async function PUT(request: Request) {
   saveState();
   return Response.json(snapshot());
 }
+
+export const GET = forVisitor(handleGET);
+export const PUT = forVisitor(handlePUT);

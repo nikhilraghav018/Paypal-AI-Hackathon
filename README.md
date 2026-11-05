@@ -46,13 +46,15 @@ Velora is also an [MCP](https://modelcontextprotocol.io) server at `/api/mcp`, s
 
 There is deliberately no tool to approve, refund or change limits. A request over the agent limit waits for you in Velora, and a blocked one stays blocked however it is worded.
 
-To switch it on, set `VELORA_MCP_TOKEN` in `.env.local` to a long random secret (`openssl rand -hex 32`) and restart. Clients send it as a bearer token. For example, with Claude Code:
+To switch it on, set `VELORA_MCP_TOKEN` in `.env.local` to a long random secret (`openssl rand -hex 32`) and restart. Without it, the endpoint stays off.
+
+Each visitor then gets their own agent key. Open **Live services**, then **Connect an AI agent**, and copy the ready-made Claude Code command:
 
 ```bash
-claude mcp add --transport http velora http://localhost:3000/api/mcp --header "Authorization: Bearer YOUR_TOKEN"
+claude mcp add --transport http velora http://localhost:3000/api/mcp --header "Authorization: Bearer YOUR_AGENT_KEY"
 ```
 
-Then ask Claude something like "Use Velora to buy me a yoga mat under $40." Without the token set, the endpoint stays off.
+Then ask Claude something like "Use Velora to buy me a yoga mat under $40." The purchase shows up in your own missions. **New key** turns the old one off at once.
 
 ## Safety design
 
@@ -62,7 +64,8 @@ Then ask Claude something like "Use Velora to buy me a yoga mat under $40." With
 - **Budget reservations.** Pending checkouts count against the monthly budget, and refunds restore it.
 - **Tamper-evident audit trail.** Each entry includes the hash of the one before it, so an edit breaks the chain.
 - **Verified webhooks.** PayPal confirms each event's signature before a refund, reversal or denial made outside the app can change the budget.
-- **Outside agents get no extra power.** MCP requests need a secret token, share the app's rate limit, and can only ask and check. Their name is recorded in the audit trail.
+- **Outside agents get no extra power.** MCP requests need the visitor's own agent key, share the app's rate limit, and can only ask and check. The key is separate from the browser cookie, so it can't be used to open the app and approve. The agent's name is recorded in the audit trail.
+- **Private data for each visitor.** Each browser gets a random ID in a cookie on its first visit and its own missions, cart, budget, PayPal connection and dashboard. A new visitor starts with an empty app and sees nobody else's data.
 - **Sandbox only.** The PayPal host is fixed in code, so the app cannot reach the live API.
 
 ## How PayPal is used

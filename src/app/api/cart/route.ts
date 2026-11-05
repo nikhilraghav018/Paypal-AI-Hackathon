@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { CartError, MAX_QUANTITY, TAX_RATE, addToCart, cartTotals, removeFromCart, reviewCart, setCartQuantity } from "@/lib/cart";
 import { getState, saveState } from "@/lib/store";
+import { forVisitor } from "@/lib/visitor";
 
 function snapshot() {
   const { cart } = getState();
@@ -27,19 +28,24 @@ async function respond(change: (body: Record<string, unknown>) => void, request:
   }
 }
 
-export async function GET() {
+async function handleGET() {
   await connection();
   return Response.json(snapshot());
 }
 
-export function POST(request: Request) {
+function handlePOST(request: Request) {
   return respond((body) => addToCart(String(body.missionId), String(body.candidateId)), request);
 }
 
-export function PATCH(request: Request) {
+function handlePATCH(request: Request) {
   return respond((body) => setCartQuantity(String(body.itemId), Number(body.quantity)), request);
 }
 
-export function DELETE(request: Request) {
+function handleDELETE(request: Request) {
   return respond((body) => removeFromCart(String(body.itemId)), request);
 }
+
+export const GET = forVisitor(handleGET);
+export const POST = forVisitor(handlePOST);
+export const PATCH = forVisitor(handlePATCH);
+export const DELETE = forVisitor(handleDELETE);

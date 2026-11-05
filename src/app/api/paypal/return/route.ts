@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
 import { cancelCheckout, completePayment } from "@/lib/orchestrator";
 import { getState } from "@/lib/store";
+import { forVisitor } from "@/lib/visitor";
 
-export async function GET(request: NextRequest) {
+async function handleGET(request: NextRequest) {
   const { searchParams, origin } = request.nextUrl;
   const missionId = searchParams.get("mission") ?? "";
   const base = process.env.APP_URL?.replace(/\/$/, "") || origin;
@@ -23,3 +24,5 @@ export async function GET(request: NextRequest) {
   }
   return Response.redirect(`${base}/?mission=${id}${notice}`, 303);
 }
+
+export const GET = forVisitor(handleGET);

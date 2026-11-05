@@ -5,7 +5,7 @@ import { GENESIS_HASH, hashEvent, issueMandate, mandateProblem } from "./integri
 import { captureOrder, chargeSavedAccount, createOrder, getOrderAmount, paypalConfigured, refundCapture, type PayPalWebhookEvent } from "./paypal";
 import { evaluatePolicy, usd } from "./policy";
 import { preferenceLabels, type Preferences } from "./preferences";
-import { getState, saveState } from "./store";
+import { getState, saveState, type AppState } from "./store";
 import type { AgentEvent, AgentName, Candidate, Mission, RequestedItem, StepSource } from "./types";
 
 type Emit = (mission: Mission, event: AgentEvent) => void;
@@ -536,6 +536,16 @@ export async function refundMission(id: string): Promise<Mission> {
   return mission;
 }
 
+/** The mission a PayPal event is about, matched by its capture or by the mission ID sent to PayPal. */
+export function webhookMission(state: AppState, event: PayPalWebhookEvent): Mission | undefined {
+  const resource = event.resource;
+  const parentCapture = resource?.links?.find((l) => l.rel === "up")?.href?.split("/").pop();
+  const captureId = event.event_type === "PAYMENT.CAPTURE.REFUNDED" ? parentCapture : resource?.id;
+  return Object.values(state.missions).find(
+    (m) => (captureId && m.captureId === captureId) || (resource?.custom_id && m.id === resource.custom_id),
+  );
+}
+
 /** Applies a signature-verified PayPal event, so changes made outside the app still reach the budget. */
 export function applyWebhookEvent(event: PayPalWebhookEvent): void {
   const state = getState();
@@ -543,11 +553,7 @@ export function applyWebhookEvent(event: PayPalWebhookEvent): void {
   state.seenWebhookIds.push(event.id);
 
   const resource = event.resource;
-  const parentCapture = resource?.links?.find((l) => l.rel === "up")?.href?.split("/").pop();
-  const captureId = event.event_type === "PAYMENT.CAPTURE.REFUNDED" ? parentCapture : resource?.id;
-  const mission = Object.values(state.missions).find(
-    (m) => (captureId && m.captureId === captureId) || (resource?.custom_id && m.id === resource.custom_id),
-  );
+  const mission = webhookMission(state, event);
   if (!mission) {
     saveState();
     return;

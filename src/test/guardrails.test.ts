@@ -7,7 +7,8 @@ import { addToCart, cartTotals, removeFromCart, reviewCart, setCartQuantity } fr
 import { applyWebhookEvent, approveMission, cancelCheckout, checkoutCart, chooseProduct, completePayment, expireStaleOrders, refundMission, rejectMission, runMission } from "@/lib/orchestrator";
 import { PAYPAL_BASE_URL, buildOrderBody, verifyWebhook } from "@/lib/paypal";
 import { DEFAULT_POLICY, committedThisMonth, evaluatePolicy, restrictedCategory } from "@/lib/policy";
-import { getState, resetState } from "@/lib/store";
+import { agentKey, rotateAgentKey } from "@/lib/agent-key";
+import { getState, resetState, runAsVisitor } from "@/lib/store";
 import type { BasketLine, Candidate, Mission } from "@/lib/types";
 
 const BASE = "http://localhost:3000";
@@ -787,7 +788,7 @@ describe("cart", () => {
 describe("MCP server for outside agents", () => {
   const TOKEN = "t".repeat(32);
   let id = 0;
-  const call = async (method: string, params: object = {}, token: string | null = TOKEN) => {
+  const call = async (method: string, params: object = {}, token: string | null = agentKey()) => {
     const { POST } = await import("@/app/api/mcp/route");
     const { NextRequest } = await import("next/server");
     const headers: Record<string, string> = { "content-type": "application/json", accept: "application/json, text/event-stream" };
@@ -801,12 +802,27 @@ describe("MCP server for outside agents", () => {
 
   beforeEach(() => vi.stubEnv("VELORA_MCP_TOKEN", TOKEN));
 
-  it("stays off without a long secret, and refuses a wrong token", async () => {
+  it("stays off without a long secret, and refuses a wrong or old key", async () => {
     vi.stubEnv("VELORA_MCP_TOKEN", "short");
     expect((await call("tools/list")).status).toBe(503);
     vi.stubEnv("VELORA_MCP_TOKEN", TOKEN);
     expect((await call("tools/list", {}, null)).status).toBe(401);
-    expect((await call("tools/list", {}, "x".repeat(32))).status).toBe(401);
+    expect((await call("tools/list", {}, TOKEN)).status).toBe(401);
+    const old = agentKey();
+    rotateAgentKey();
+    expect((await call("tools/list", {}, old)).status).toBe(401);
+    expect((await call("tools/list")).status).toBe(200);
+  });
+
+  it("acts only for the visitor who owns the key", async () => {
+    const other = "b".repeat(32);
+    const key = runAsVisitor(other, () => agentKey());
+    const { data } = await (async () => {
+      const body = await (await call("tools/call", { name: "request_purchase", arguments: { request: "buy office chair" } }, key)).json();
+      return { data: JSON.parse(body.result.content[0].text) };
+    })();
+    expect(getState().missions[data.missionId]).toBeUndefined();
+    expect(runAsVisitor(other, () => getState().missions[data.missionId])).toBeDefined();
   });
 
   it("offers no tool that approves, refunds or changes limits", async () => {
@@ -833,6 +849,42 @@ describe("MCP server for outside agents", () => {
   it("reports the spending rules", async () => {
     const { data } = await tool("get_spending_rules");
     expect(data).toMatchObject({ autopay: "off", monthlyBudget: "$500.00" });
+  });
+});
+
+describe("visitors", () => {
+  const A = "a".repeat(32);
+  const B = "c".repeat(32);
+
+  it("gives each visitor their own missions, cart and budget", async () => {
+    const mission = await runAsVisitor(A, async () => {
+      resetState();
+      return runMission("buy office chair", BASE);
+    });
+    runAsVisitor(B, () => resetState());
+    expect(runAsVisitor(A, () => getState().missions[mission.id])).toBeDefined();
+    expect(runAsVisitor(B, () => Object.keys(getState().missions))).toHaveLength(0);
+    expect(getState().missions[mission.id]).toBeUndefined();
+  });
+
+  it("refuses an API call that has no visitor", async () => {
+    const { GET } = await import("@/app/api/missions/route");
+    const { NextRequest } = await import("next/server");
+    expect((await GET(new NextRequest(`${BASE}/api/missions`), undefined)).status).toBe(400);
+    const ok = await GET(new NextRequest(`${BASE}/api/missions`, { headers: { "x-velora-visitor": A } }), undefined);
+    expect(ok.status).toBe(200);
+  });
+
+  it("sends a PayPal event to the visitor who owns the payment", async () => {
+    const { webhookMission } = await import("@/lib/orchestrator");
+    const { findVisitor } = await import("@/lib/store");
+    runAsVisitor(B, () => {
+      resetState();
+      getState().missions["m-1"] = { id: "m-1", captureId: "CAP-B" } as Mission;
+    });
+    const event = { id: "WH-B", event_type: "PAYMENT.CAPTURE.COMPLETED", resource: { id: "CAP-B" } };
+    expect(findVisitor((state) => Boolean(webhookMission(state, event)))).toBe(B);
+    expect(findVisitor((state) => Boolean(webhookMission(state, { ...event, resource: { id: "NONE" } })))).toBeNull();
   });
 });
 
